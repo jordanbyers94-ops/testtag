@@ -8,13 +8,10 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 
 const TEMPLATE_HEADERS = ['Asset ID', 'Location', 'Appliance', 'Plant No.', 'Brand ', 'Model No.', 'Serial No.', 'Pass/Fail', 'Tag No.', 'Test Date', 'Next Due', 'Notes'];
 
-async function fetchRegisterRows(site) {
+async function fetchRegisterRows(site, resultFilter) {
   const params = [];
-  let where = '';
-  if (site) {
-    params.push(site);
-    where = 'WHERE a.site = $1';
-  }
+  const clauses = [];
+  if (site) { params.push(site); clauses.push(`a.site = $${params.length}`); }
   const { rows } = await pool.query(
     `
     SELECT a.site, a.location, a.appliance, a.plant_no, a.brand, a.model_no, a.serial_no, a.notes,
@@ -24,22 +21,25 @@ async function fetchRegisterRows(site) {
       SELECT * FROM test_records tr WHERE tr.asset_id = a.id
       ORDER BY tr.test_date DESC NULLS LAST, tr.created_at DESC LIMIT 1
     ) t ON true
-    ${where}
+    ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''}
     ORDER BY a.site ASC, a.location ASC, a.plant_no ASC
     `,
     params
   );
-  return rows;
+  return resultFilter ? rows.filter((r) => r.last_result === resultFilter) : rows;
 }
 
-// GET /api/register/export?site=xxx
+// GET /api/register/export?site=xxx&result=fail
 // With a site given: reproduces the original template exactly (title rows + these headers)
 // so it drops straight back into the same-shaped workbook.
 // Without a site: a consolidated multi-site view with a Site column added.
+// ?result=fail exports only items whose latest test failed - handy for a
+// client-facing "these need attention" list.
 router.get('/export', async (req, res) => {
   try {
     const site = (req.query.site || '').trim();
-    const rows = await fetchRegisterRows(site || null);
+    const resultFilter = (req.query.result || '').trim();
+    const rows = await fetchRegisterRows(site || null, resultFilter === 'fail' || resultFilter === 'pass' ? resultFilter : null);
 
     const wb = XLSX.utils.book_new();
     let ws;
@@ -93,8 +93,9 @@ router.get('/export', async (req, res) => {
     XLSX.utils.book_append_sheet(wb, ws, 'Test Tag Items');
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     const filenameSite = site ? site.replace(/[^a-z0-9]+/gi, '_') : 'all-sites';
+    const filenameSuffix = resultFilter === 'fail' ? '-fails-only' : '';
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="test-tag-register-${filenameSite}-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="test-tag-register-${filenameSite}${filenameSuffix}-${new Date().toISOString().slice(0, 10)}.xlsx"`);
     res.send(buffer);
   } catch (err) {
     console.error(err);
@@ -146,6 +147,7 @@ router.post('/import', upload.single('file'), async (req, res) => {
 
     const site = (req.query.site || '').trim() || (aoa[0] && aoa[0][0] ? String(aoa[0][0]).trim() : null);
     if (!site) return res.status(400).json({ error: 'Could not determine site - pass ?site=SiteName or ensure row 1 has the site name.' });
+    await pool.query('INSERT INTO sites (name) VALUES ($1) ON CONFLICT (LOWER(name)) DO NOTHING', [site]);
 
     const dataRows = aoa.slice(headerRowIdx + 1).filter((row) => row.some((c) => c !== null && c !== ''));
 
@@ -166,7 +168,7 @@ router.post('/import', upload.single('file'), async (req, res) => {
           `
           INSERT INTO assets (site, location, appliance, plant_no, brand, model_no, serial_no, notes)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-          ON CONFLICT (site, COALESCE(location, ''), plant_no) WHERE plant_no IS NOT NULL
+          ON CONFLICT (LOWER(site), LOWER(COALESCE(location, '')), LOWER(plant_no)) WHERE plant_no IS NOT NULL
           DO UPDATE SET
             appliance = COALESCE(EXCLUDED.appliance, assets.appliance),
             brand = COALESCE(EXCLUDED.brand, assets.brand),

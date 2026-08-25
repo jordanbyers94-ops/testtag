@@ -11,10 +11,14 @@
     <div class="brand"><span class="brand-aus">AUS</span><span class="brand-air">AIR</span><span class="brand-elec">ELECTRICAL</span></div>
     <div class="app-title">Test &amp; Tag Register</div>
   </header>
+  <div id="offlineBanner" class="offline-banner" style="display:none;">
+    Offline — saves will queue and sync automatically once you're back online. <span id="queueCount"></span>
+  </div>
 
   <nav class="tabs">
     <button class="tab-btn active" data-tab="scan">Scan Tag</button>
     <button class="tab-btn" data-tab="register">Register</button>
+    <button class="tab-btn" data-tab="due">Due</button>
   </nav>
 
   <main id="app">
@@ -36,13 +40,25 @@
         <label>Location <span class="hint">(area within the site, e.g. Tuckshop)</span>
           <input id="locationInput" type="text" />
         </label>
+        <label>Environment category <span class="hint">(sets the default retest interval)</span>
+          <select id="categoryInput">
+            <option value="">— not set —</option>
+            <option value="construction">Construction site (3 months)</option>
+            <option value="hostile">Hostile environment (3 months)</option>
+            <option value="commercial_kitchen">Commercial kitchen (6 months)</option>
+            <option value="factory_workshop">Factory / workshop (6 months)</option>
+            <option value="office_low_risk">Office / low-risk (5 years)</option>
+            <option value="other">Other (12 months)</option>
+          </select>
+        </label>
       </div>
 
-      <div id="scanArea" class="card">
+      <div class="card">
         <h3>Photograph the test tag / nameplate</h3>
         <input id="photoInput" type="file" accept="image/*" capture="environment" />
         <div id="preview"></div>
         <button id="extractBtn" class="btn btn-primary" disabled>Read Tag</button>
+        <button id="skipExtractBtn" class="btn">Enter manually instead</button>
         <div id="extractStatus" class="status"></div>
       </div>
 
@@ -69,7 +85,7 @@
           </select>
         </label>
         <label>Test Date<input id="t_test_date" type="date" /></label>
-        <label>Next Due<input id="t_next_due" type="date" /></label>
+        <label>Next Due <span class="hint">(auto-filled from environment category if left blank)</span><input id="t_next_due" type="date" /></label>
         <label>Notes<textarea id="t_notes" rows="2"></textarea></label>
         <button id="saveTestBtn" class="btn btn-success">Log Test</button>
         <div id="testStatus" class="status"></div>
@@ -85,6 +101,11 @@
           <input id="searchInput" type="text" placeholder="Search plant no., appliance, location, serial..." />
         </div>
         <div class="register-toolbar">
+          <button id="filterAllBtn" class="btn chip active">All</button>
+          <button id="filterFailBtn" class="btn chip">Fails only</button>
+          <button id="renameSiteBtn" class="btn">Rename current site filter</button>
+        </div>
+        <div class="register-toolbar">
           <button id="refreshBtn" class="btn">Refresh</button>
           <button id="exportBtn" class="btn btn-primary">Export .xlsx</button>
           <label class="btn" for="importInput">Import Register</label>
@@ -94,7 +115,27 @@
         <div id="registerList"></div>
       </div>
     </section>
+
+    <!-- DUE TAB -->
+    <section id="tab-due" class="tab-panel">
+      <div class="card">
+        <h3>Sites needing attention</h3>
+        <p class="hint">Overdue and due-within-30-days counts, by site. Tap a site to jump to its register.</p>
+        <div id="dueSummary"></div>
+      </div>
+    </section>
   </main>
+
+  <!-- Test history / edit modal -->
+  <div id="historyModal" class="modal" style="display:none;">
+    <div class="modal-inner">
+      <div class="modal-header">
+        <h3 id="historyModalTitle">Test history</h3>
+        <button id="closeHistoryModal" class="btn">Close</button>
+      </div>
+      <div id="historyList"></div>
+    </div>
+  </div>
 
   <script src="/app.js"></script>
 </body>
