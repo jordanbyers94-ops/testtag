@@ -1,0 +1,21 @@
+{
+  "name": "aus-air-test-tag",
+  "version": "1.0.0",
+  "description": "Test & Tag register app for Aus Air Electrical - photo recognition of plant numbers/nameplates, register management, Excel import/export",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.11.5",
+    "multer": "^1.4.5-lts.1",
+    "xlsx": "^0.18.5",
+    "cors": "^2.8.5"
+  }
+}

@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: testtag
+      POSTGRES_PASSWORD: testtag
+      POSTGRES_DB: testtag
+    ports:
+      - "5432:5432"
+    volumes:
+      - testtag_pgdata:/var/lib/postgresql/data
+
+volumes:
+  testtag_pgdata:
