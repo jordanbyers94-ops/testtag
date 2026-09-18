@@ -19,9 +19,10 @@ const API = APP_BASE.replace(/\/$/, '') + '/api';
 const IS_PROXIED = APP_BASE !== '/';
 let accessToken = localStorage.getItem('testTagAccessToken') || (IS_PROXIED ? 'proxied' : '');
 let currentAssetId = null;
+let currentAssetIsTemp = false; // true while currentAssetId is a client-side tempId (offline, not yet synced)
 let currentPhotoBase64 = null;
 let currentPhotoMediaType = null;
-let resultFilter = ''; // '' | 'fail'
+let activeFilter = ''; // '' | 'fail' | 'overdue' | 'soon'
 
 // ---------- Tabs ----------
 document.querySelectorAll('.tab-btn').forEach((btn) => {
@@ -78,13 +79,21 @@ function persistTester() {
 }
 
 // ---------- Offline queue ----------
-// Extraction needs the network (it's an AI call) so it's disabled offline, but
-// asset saves and test logs are queued locally and flushed automatically on
-// reconnect. This is a best-effort queue, not a full offline cache of the register.
+// Extraction needs the network (it's an AI call) so it's disabled offline, but asset saves
+// and test logs are queued locally and flushed automatically on reconnect. This is a
+// best-effort queue, not a full offline cache of the register.
+//
+// Queue entries are typed rather than generic POST wrappers, specifically so a test logged
+// against an asset that's ITSELF still queued (both saved in the same offline session) can be
+// chained together correctly instead of being silently unsaveable:
+//   { type: 'asset', tempId: 'temp_xxx', body }        -- a new/updated asset, not yet synced
+//   { type: 'test',  assetId: 123, body }               -- test against an already-real asset id
+//   { type: 'test',  assetTempId: 'temp_xxx', body }     -- test against a still-queued asset
 const QUEUE_KEY = 'testTagOfflineQueue';
 function getQueue() { try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch { return []; } }
 function setQueue(q) { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); updateOfflineBanner(); }
 function enqueue(action) { const q = getQueue(); q.push(action); setQueue(q); }
+function makeTempId() { return 'temp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8); }
 
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
@@ -102,15 +111,30 @@ function updateOfflineBanner() {
   }
 }
 
+// Processes the queue in order (asset actions before the test actions that reference them,
+// since they were enqueued in that order). Resolves each synced asset's tempId to its real id
+// as it goes, so a test queued this same offline session against a still-temp asset gets sent
+// right after that asset syncs, in the same pass. A test whose asset hasn't synced yet (still
+// failing, or genuinely not reached this pass) stays queued rather than being dropped.
 async function flushQueue() {
   if (!navigator.onLine) return;
   let q = getQueue();
   if (q.length === 0) return;
+  const tempIdMap = {};
   const remaining = [];
   for (const action of q) {
     try {
-      const res = await fetch(action.url, { method: action.method, headers: apiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(action.body) });
-      if (!res.ok) throw new Error('sync failed');
+      if (action.type === 'asset') {
+        const res = await fetch(`${API}/assets`, { method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(action.body) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'sync failed');
+        tempIdMap[action.tempId] = data.id;
+      } else if (action.type === 'test') {
+        const assetId = action.assetId || tempIdMap[action.assetTempId];
+        if (!assetId) { remaining.push(action); continue; } // its asset hasn't synced yet -- retry next time
+        const res = await fetch(`${API}/assets/${assetId}/tests`, { method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(action.body) });
+        if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error || 'sync failed'); }
+      }
     } catch (e) {
       remaining.push(action); // keep for next attempt
     }
@@ -121,20 +145,6 @@ async function flushQueue() {
 
 window.addEventListener('online', () => { updateOfflineBanner(); flushQueue(); });
 window.addEventListener('offline', updateOfflineBanner);
-
-// Wraps a POST call: sends immediately if online, queues it if offline.
-// queuedAssetId lets a queued "log test" action reference an asset that was
-// itself just queued (see saveAssetBtn handler) rather than a real numeric id.
-async function postOrQueue(url, body) {
-  if (navigator.onLine) {
-    const res = await fetch(url, { method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Request failed');
-    return data;
-  }
-  enqueue({ url, method: 'POST', body });
-  return null; // caller must handle "queued, no id yet"
-}
 
 // ---------- Site autocomplete ----------
 async function loadSiteOptions() {
@@ -165,7 +175,9 @@ photoInput.addEventListener('change', () => {
   extractBtn.disabled = !navigator.onLine;
   document.getElementById('resultCard').style.display = 'none';
   document.getElementById('testCard').style.display = 'none';
+  document.getElementById('retestBanner').style.display = 'none';
   currentAssetId = null;
+  currentAssetIsTemp = false;
   currentPhotoBase64 = null;
 });
 
@@ -177,7 +189,9 @@ document.getElementById('skipExtractBtn').addEventListener('click', () => {
   document.getElementById('resultCard').style.display = 'block';
   document.getElementById('testCard').style.display = 'block';
   document.getElementById('existingNotice').style.display = 'none';
+  document.getElementById('retestBanner').style.display = 'none';
   currentAssetId = null;
+  currentAssetIsTemp = false;
   currentPhotoBase64 = null;
 });
 
@@ -251,6 +265,7 @@ async function tryMatchExisting(site, ex) {
 
   if (found) {
     currentAssetId = found.asset.id;
+    currentAssetIsTemp = false;
     document.getElementById('categoryInput').value = found.asset.environment_category || '';
     const last = found.history[0];
     existingNotice.style.display = 'block';
@@ -281,15 +296,20 @@ document.getElementById('saveAssetBtn').addEventListener('click', async () => {
 
   try {
     if (navigator.onLine) {
-      const data = await postOrQueue(`${API}/assets`, payload);
+      const res = await fetch(`${API}/assets`, { method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
       currentAssetId = data.id;
+      currentAssetIsTemp = false;
       document.getElementById('testCard').style.display = 'block';
       extractStatus.textContent = 'Asset saved to register.';
     } else {
-      // Can't get a real asset id while offline - queue the asset save and let
-      // the test-log step queue against a lookup-by-plant-no marker instead.
-      enqueue({ url: `${API}/assets`, method: 'POST', body: payload });
-      currentAssetId = 'PENDING';
+      // Can't get a real asset id while offline -- queue the asset save under a client-side
+      // tempId, so a test logged against it (below) can be chained to sync right after.
+      const tempId = makeTempId();
+      enqueue({ type: 'asset', tempId, body: payload });
+      currentAssetId = tempId;
+      currentAssetIsTemp = true;
       document.getElementById('testCard').style.display = 'block';
       extractStatus.textContent = 'Offline - asset queued, will sync when back online.';
     }
@@ -315,15 +335,21 @@ document.getElementById('saveTestBtn').addEventListener('click', async () => {
   };
 
   try {
-    if (navigator.onLine && currentAssetId !== 'PENDING') {
-      await postOrQueue(`${API}/assets/${currentAssetId}/tests`, payload);
+    if (navigator.onLine && !currentAssetIsTemp) {
+      const res = await fetch(`${API}/assets/${currentAssetId}/tests`, { method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
       document.getElementById('testStatus').textContent = 'Test logged. Ready for the next item.';
+    } else if (currentAssetIsTemp) {
+      // The parent asset is itself still queued -- queue this test against the same tempId so
+      // flushQueue() can chain them together once the asset syncs (see flushQueue above).
+      enqueue({ type: 'test', assetTempId: currentAssetId, body: payload });
+      document.getElementById('testStatus').textContent = 'Offline - test result saved and queued, will sync with its asset once back online.';
     } else {
-      // Either genuinely offline, or the parent asset save is itself still
-      // queued (no real id yet) - queue this against a placeholder that the
-      // queue can't resolve automatically. Flag it clearly rather than silently
-      // dropping it.
-      document.getElementById('testStatus').textContent = 'Offline with no saved asset id yet - please retry logging this test once back online and the asset has synced.';
+      // Asset was already saved with a real id (earlier, while online); we've since gone
+      // offline before logging the test. Queue it against that real id directly.
+      enqueue({ type: 'test', assetId: currentAssetId, body: payload });
+      document.getElementById('testStatus').textContent = 'Offline - test result queued, will sync when back online.';
     }
     setTimeout(resetScanForm, 1400);
   } catch (err) {
@@ -341,7 +367,9 @@ function resetScanForm() {
   document.getElementById('testStatus').textContent = '';
   document.getElementById('t_tag_no').value = '';
   document.getElementById('t_notes').value = '';
+  document.getElementById('retestBanner').style.display = 'none';
   currentAssetId = null;
+  currentAssetIsTemp = false;
   currentPhotoBase64 = null;
 }
 
@@ -350,12 +378,16 @@ const registerList = document.getElementById('registerList');
 const searchInput = document.getElementById('searchInput');
 const siteFilter = document.getElementById('siteFilter');
 
-document.getElementById('filterAllBtn').addEventListener('click', () => setResultFilter(''));
-document.getElementById('filterFailBtn').addEventListener('click', () => setResultFilter('fail'));
-function setResultFilter(f) {
-  resultFilter = f;
+document.getElementById('filterAllBtn').addEventListener('click', () => setActiveFilter(''));
+document.getElementById('filterFailBtn').addEventListener('click', () => setActiveFilter('fail'));
+document.getElementById('filterOverdueBtn').addEventListener('click', () => setActiveFilter('overdue'));
+document.getElementById('filterSoonBtn').addEventListener('click', () => setActiveFilter('soon'));
+function setActiveFilter(f) {
+  activeFilter = f;
   document.getElementById('filterAllBtn').classList.toggle('active', f === '');
   document.getElementById('filterFailBtn').classList.toggle('active', f === 'fail');
+  document.getElementById('filterOverdueBtn').classList.toggle('active', f === 'overdue');
+  document.getElementById('filterSoonBtn').classList.toggle('active', f === 'soon');
   loadRegister();
 }
 
@@ -365,7 +397,9 @@ async function loadRegister() {
     const params = new URLSearchParams();
     if (siteFilter.value.trim()) params.set('site', siteFilter.value.trim());
     if (searchInput.value.trim()) params.set('search', searchInput.value.trim());
-    if (resultFilter) params.set('result', resultFilter);
+    if (activeFilter === 'fail') params.set('result', 'fail');
+    else if (activeFilter === 'overdue') params.set('due', 'overdue');
+    else if (activeFilter === 'soon') params.set('due', 'soon');
     const res = await fetch(`${API}/assets?${params}`, { headers: apiHeaders() });
     const rows = await res.json();
     if (!res.ok) throw new Error(rows.error || 'Failed to load');
@@ -435,9 +469,15 @@ document.getElementById('renameSiteBtn').addEventListener('click', async () => {
 // ---------- Test history modal (view / edit / delete) ----------
 const historyModal = document.getElementById('historyModal');
 document.getElementById('closeHistoryModal').addEventListener('click', () => historyModal.style.display = 'none');
+let modalAssetId = null;
+let modalAppliance = null;
 
 async function openHistoryModal(assetId, appliance) {
+  modalAssetId = assetId;
+  modalAppliance = appliance;
   document.getElementById('historyModalTitle').textContent = appliance || 'Test history';
+  document.getElementById('editAssetForm').style.display = 'none';
+  document.getElementById('editAssetStatus').textContent = '';
   const historyList = document.getElementById('historyList');
   historyList.innerHTML = '<p class="status">Loading...</p>';
   historyModal.style.display = 'flex';
@@ -497,6 +537,120 @@ async function openHistoryModal(assetId, appliance) {
   }
 }
 
+// ---------- Log New Test (quick retest from the register, no re-scan needed) ----------
+// Jumps to the Scan tab and shows the test-log form directly against this already-known
+// asset, skipping site/location entry and the photo/extract step entirely -- most test & tag
+// work is retesting items already on the register, so this is the common path in practice.
+document.getElementById('quickRetestBtn').addEventListener('click', async () => {
+  if (!modalAssetId) return;
+  historyModal.style.display = 'none';
+  document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'scan'));
+  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === 'tab-scan'));
+
+  const banner = document.getElementById('retestBanner');
+  banner.style.display = 'block';
+  banner.textContent = 'Loading item...';
+
+  try {
+    const res = await fetch(`${API}/assets/${modalAssetId}`, { headers: apiHeaders() });
+    const asset = await res.json();
+    if (!res.ok) throw new Error(asset.error || 'Failed to load item');
+
+    banner.textContent = `Retesting: ${asset.appliance || 'item'} — ${asset.site}${asset.location ? ' / ' + asset.location : ''}${asset.plant_no ? ' (Plant No. ' + asset.plant_no + ')' : ''}`;
+
+    currentAssetId = asset.id;
+    currentAssetIsTemp = false;
+    currentPhotoBase64 = null;
+    currentPhotoMediaType = null;
+    document.getElementById('siteInput').value = asset.site || '';
+    document.getElementById('locationInput').value = asset.location || '';
+    document.getElementById('categoryInput').value = asset.environment_category || '';
+    document.getElementById('resultCard').style.display = 'none';
+    document.getElementById('testCard').style.display = 'block';
+    document.getElementById('t_tag_no').value = '';
+    document.getElementById('t_notes').value = '';
+    document.getElementById('t_test_date').value = '';
+    document.getElementById('t_next_due').value = '';
+    document.getElementById('t_result').value = 'pass';
+    document.getElementById('testStatus').textContent = '';
+  } catch (err) {
+    banner.textContent = `Error loading item: ${err.message}`;
+  }
+});
+
+// ---------- Edit Item (fix a mistaken entry after the fact) ----------
+document.getElementById('editAssetBtn').addEventListener('click', async () => {
+  if (!modalAssetId) return;
+  const form = document.getElementById('editAssetForm');
+  const statusEl = document.getElementById('editAssetStatus');
+  statusEl.textContent = 'Loading...'; statusEl.className = 'status';
+  form.style.display = 'block';
+  try {
+    const res = await fetch(`${API}/assets/${modalAssetId}`, { headers: apiHeaders() });
+    const asset = await res.json();
+    if (!res.ok) throw new Error(asset.error || 'Failed to load item');
+    document.getElementById('edit_site').value = asset.site || '';
+    document.getElementById('edit_location').value = asset.location || '';
+    document.getElementById('edit_appliance').value = asset.appliance || '';
+    document.getElementById('edit_plant_no').value = asset.plant_no || '';
+    document.getElementById('edit_brand').value = asset.brand || '';
+    document.getElementById('edit_model_no').value = asset.model_no || '';
+    document.getElementById('edit_serial_no').value = asset.serial_no || '';
+    statusEl.textContent = '';
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`; statusEl.className = 'status err';
+  }
+});
+
+document.getElementById('cancelAssetEditBtn').addEventListener('click', () => {
+  document.getElementById('editAssetForm').style.display = 'none';
+});
+
+document.getElementById('saveAssetEditBtn').addEventListener('click', async () => {
+  if (!modalAssetId) return;
+  const statusEl = document.getElementById('editAssetStatus');
+  const site = document.getElementById('edit_site').value.trim();
+  if (!site) { statusEl.textContent = 'Site is required.'; statusEl.className = 'status err'; return; }
+  const payload = {
+    site,
+    location: document.getElementById('edit_location').value.trim() || null,
+    appliance: document.getElementById('edit_appliance').value.trim() || null,
+    plant_no: document.getElementById('edit_plant_no').value.trim() || null,
+    brand: document.getElementById('edit_brand').value.trim() || null,
+    model_no: document.getElementById('edit_model_no').value.trim() || null,
+    serial_no: document.getElementById('edit_serial_no').value.trim() || null,
+  };
+  statusEl.textContent = 'Saving...'; statusEl.className = 'status';
+  try {
+    const res = await fetch(`${API}/assets/${modalAssetId}`, { method: 'PATCH', headers: apiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(payload) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Update failed');
+    statusEl.textContent = 'Saved.'; statusEl.className = 'status ok';
+    document.getElementById('editAssetForm').style.display = 'none';
+    document.getElementById('historyModalTitle').textContent = data.appliance || 'Test history';
+    modalAppliance = data.appliance;
+    loadSiteOptions();
+    loadRegister();
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`; statusEl.className = 'status err';
+  }
+});
+
+// ---------- Delete Item (remove a mistaken entry entirely, not just a test result) ----------
+document.getElementById('deleteAssetBtn').addEventListener('click', async () => {
+  if (!modalAssetId) return;
+  if (!confirm(`Delete "${modalAppliance || 'this item'}" from the register? This permanently removes it and its whole test history. This can't be undone.`)) return;
+  try {
+    const res = await fetch(`${API}/assets/${modalAssetId}`, { method: 'DELETE', headers: apiHeaders() });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Delete failed');
+    historyModal.style.display = 'none';
+    loadRegister();
+  } catch (err) {
+    alert(`Error deleting item: ${err.message}`);
+  }
+});
+
 // ---------- Due dashboard ----------
 async function loadDueSummary() {
   const el = document.getElementById('dueSummary');
@@ -538,7 +692,7 @@ async function loadDueSummary() {
 document.getElementById('exportBtn').addEventListener('click', () => {
   const params = new URLSearchParams();
   if (siteFilter.value.trim()) params.set('site', siteFilter.value.trim());
-  if (resultFilter) params.set('result', resultFilter);
+  if (activeFilter === 'fail') params.set('result', 'fail');
   fetch(`${API}/register/export?${params}`, { headers: apiHeaders() })
     .then((res) => res.blob())
     .then((blob) => {

@@ -64,20 +64,20 @@ router.patch('/sites/:oldName', async (req, res) => {
 // ---------- Register / list ----------
 
 // GET /api/assets?site=&search=&result=fail&due=overdue|soon
+// "search" is matched in JS after the query (not in SQL) so it can span both the asset's own
+// fields AND its latest test's tag number (last_tag_no only exists after the lateral join,
+// so it can't be filtered directly in the WHERE clause without a slower correlated subquery) --
+// fine at this app's scale (a single business's register, not a multi-tenant one).
 router.get('/', async (req, res) => {
   try {
     const site = (req.query.site || '').trim();
-    const search = (req.query.search || '').trim();
+    const search = (req.query.search || '').trim().toLowerCase();
     const result = (req.query.result || '').trim(); // 'pass' | 'fail'
     const due = (req.query.due || '').trim(); // 'overdue' | 'soon'
     const params = [];
     const clauses = [];
 
     if (site) { params.push(site); clauses.push(`LOWER(a.site) = LOWER($${params.length})`); }
-    if (search) {
-      params.push(`%${search}%`);
-      clauses.push(`(a.plant_no ILIKE $${params.length} OR a.appliance ILIKE $${params.length} OR a.location ILIKE $${params.length} OR a.serial_no ILIKE $${params.length})`);
-    }
 
     const { rows } = await pool.query(
       `
@@ -97,6 +97,13 @@ router.get('/', async (req, res) => {
     );
 
     let filtered = rows;
+    if (search) {
+      filtered = filtered.filter((r) => {
+        const haystack = [r.appliance, r.plant_no, r.location, r.serial_no, r.brand, r.last_tag_no]
+          .filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(search);
+      });
+    }
     if (result === 'pass' || result === 'fail') filtered = filtered.filter((r) => r.last_result === result);
     if (due === 'overdue') {
       const today = new Date().toISOString().slice(0, 10);
@@ -193,6 +200,65 @@ router.get('/match', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Lookup failed.' });
+  }
+});
+
+// GET /api/assets/:id - one asset's own details (used by the register's "Log New Test"
+// quick action to prefill a retest without re-entering site/location/appliance).
+router.get('/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM assets WHERE id = $1', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to load asset.' });
+  }
+});
+
+// PATCH /api/assets/:id - edit an existing asset's own details directly. Unlike POST /
+// (which upserts by site+location+plant_no during the photo-scan flow), this only ever
+// touches the one asset given by :id -- used by the register's "Edit Item" action to fix
+// a mistaken entry (wrong plant no., misspelled site, etc.) after the fact.
+router.patch('/:id', async (req, res) => {
+  try {
+    const { site, location, appliance, plant_no, brand, model_no, serial_no, environment_category, notes } = req.body;
+    if (!site || !site.trim()) return res.status(400).json({ error: 'site is required.' });
+
+    await pool.query('INSERT INTO sites (name) VALUES ($1) ON CONFLICT (LOWER(name)) DO NOTHING', [site.trim()]);
+
+    const { rows } = await pool.query(
+      `
+      UPDATE assets SET
+        site = $1, location = $2, appliance = $3, plant_no = $4,
+        brand = $5, model_no = $6, serial_no = $7, environment_category = $8, notes = $9,
+        updated_at = now()
+      WHERE id = $10 RETURNING *
+      `,
+      [site.trim(), location || null, appliance || null, plant_no || null, brand || null,
+        model_no || null, serial_no || null, environment_category || null, notes || null, req.params.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Asset not found.' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    if (err.code === '23505') return res.status(409).json({ error: 'Another item at that site/location already has that plant no.' });
+    res.status(500).json({ error: 'Failed to update asset.' });
+  }
+});
+
+// DELETE /api/assets/:id - permanently remove an asset AND its whole test history/photos
+// (test_records cascades via its foreign key). For fixing a mistaken entry (duplicate,
+// wrong site, entered in error) -- for undoing a single bad test result, use
+// DELETE /:id/tests/:testId instead, which keeps the asset and its other tests.
+router.delete('/:id', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM assets WHERE id = $1', [req.params.id]);
+    if (rowCount === 0) return res.status(404).json({ error: 'Asset not found.' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to delete asset.' });
   }
 });
 

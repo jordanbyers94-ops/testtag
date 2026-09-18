@@ -6,11 +6,14 @@ Standalone app (same pattern as Aus Air Job Capture): Node/Express + PostgreSQL,
 
 - **Overdue/due-soon dashboard** — a Due tab summarising overdue and due-within-30-days counts per site, tap through to filter the register.
 - **Auto-calculated retest due dates** — set an environment category per asset (construction, hostile, commercial kitchen, factory/workshop, office/low-risk, other) and Next Due auto-fills from AS/NZS 3760-typical intervals when left blank. Always editable.
-- **Fails filter** — one tap to see only failed items in the register, and export just the fail list as its own .xlsx.
-- **Offline queueing** — asset saves and test logs made while offline are queued in the browser and flushed automatically on reconnect. Photo *reading* (the AI extraction) still needs a connection since it's a live API call — the "Enter manually instead" button skips extraction so you can still log an item offline. **Known limitation:** if you save a brand-new asset while offline and then immediately log a test against it before reconnecting, the test log can't be auto-queued (there's no real asset ID yet) — the app tells you to retry that specific test once you're back online.
-- **Test history with edit/delete** — tap any register row to see its full test history, correct a mistyped result/date, or delete a bad entry.
+- **Fails/Overdue/Due Soon filters** — one tap to see only failed items, only overdue items, or only items due within 30 days; export just the fail list as its own .xlsx.
+- **Offline queueing** — asset saves and test logs made while offline are queued in the browser and flushed automatically on reconnect, including a new item saved *and* tested in the same offline session (the queued test is chained to its queued asset via a client-side temporary ID, then both sync together once you're back online — nothing gets silently dropped). Photo *reading* (the AI extraction) still needs a connection since it's a live API call — the "Enter manually instead" button skips extraction so you can still log an item offline.
+- **Test history with edit/delete** — tap any register row to see its full test history, correct a mistyped result/date, or delete a bad test record.
+- **Edit/Delete the item itself** — from that same register-row view, "Edit Item" fixes a mistyped appliance/plant no./brand/model/serial/site/location after the fact, and "Delete Item" removes a mistaken entry (duplicate, wrong site) along with its whole test history.
+- **Log New Test (quick retest)** — from the register-row view, jump straight to logging a new test against an already-registered item without re-entering its site/location or re-photographing it — the common case, since most test & tag visits are retesting items already on the register.
 - **Archived test photos** — the photo used for extraction is now stored against the test record (in Postgres, as a BYTEA column) and viewable from the history view.
 - **Site rename/merge** — type a site into the register's site filter and hit "Rename current site filter" to fix a spelling variant across every asset under it in one go.
+- **Search** now also matches an item's brand and its most recent tag number, not just appliance/plant no./location/serial no.
 
 ## Schema
 

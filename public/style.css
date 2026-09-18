@@ -90,7 +90,9 @@ input[type="file"] { margin-top: 8px; }
 }
 .btn-primary { background: var(--aus-orange); border-color: var(--aus-orange); color: #fff; }
 .btn-success { background: var(--success); border-color: var(--success); color: #fff; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-danger { display: inline-block; padding: 10px 16px; border-radius: 6px; border: 1px solid var(--danger); background: #fff; color: var(--danger); font-weight: 600; font-size: 14px; cursor: pointer; margin-top: 10px; }
+.btn-danger:hover { background: var(--danger); color: #fff; }
+.btn:disabled, .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .status { font-size: 13px; margin-top: 8px; color: #555; }
 .hint { font-weight: 400; color: #999; font-size: 12px; }

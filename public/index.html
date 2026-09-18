@@ -24,6 +24,7 @@
   <main id="app">
     <!-- SCAN TAB -->
     <section id="tab-scan" class="tab-panel active">
+      <div id="retestBanner" class="notice" style="display:none;"></div>
       <div id="tokenGate" class="card" style="display:none;">
         <h3>Access token</h3>
         <p>Enter the shared team access token to use this app.</p>
@@ -103,6 +104,10 @@
         <div class="register-toolbar">
           <button id="filterAllBtn" class="btn chip active">All</button>
           <button id="filterFailBtn" class="btn chip">Fails only</button>
+          <button id="filterOverdueBtn" class="btn chip">Overdue</button>
+          <button id="filterSoonBtn" class="btn chip">Due soon</button>
+        </div>
+        <div class="register-toolbar">
           <button id="renameSiteBtn" class="btn">Rename current site filter</button>
         </div>
         <div class="register-toolbar">
@@ -132,6 +137,25 @@
       <div class="modal-header">
         <h3 id="historyModalTitle">Test history</h3>
         <button id="closeHistoryModal" class="btn">Close</button>
+      </div>
+      <div class="register-toolbar">
+        <button id="quickRetestBtn" class="btn btn-primary">Log New Test</button>
+        <button id="editAssetBtn" class="btn">Edit Item</button>
+        <button id="deleteAssetBtn" class="btn-danger">Delete Item</button>
+      </div>
+      <div id="editAssetForm" class="card" style="display:none;margin-top:10px;">
+        <label>Site<input id="edit_site" type="text" /></label>
+        <label>Location<input id="edit_location" type="text" /></label>
+        <label>Appliance<input id="edit_appliance" type="text" /></label>
+        <label>Plant No.<input id="edit_plant_no" type="text" /></label>
+        <label>Brand<input id="edit_brand" type="text" /></label>
+        <label>Model No.<input id="edit_model_no" type="text" /></label>
+        <label>Serial No.<input id="edit_serial_no" type="text" /></label>
+        <div class="register-toolbar">
+          <button id="saveAssetEditBtn" class="btn btn-primary">Save Changes</button>
+          <button id="cancelAssetEditBtn" class="btn">Cancel</button>
+        </div>
+        <div id="editAssetStatus" class="status"></div>
       </div>
       <div id="historyList"></div>
     </div>
