@@ -1,4 +1,15 @@
-const API = '/api';
+// Derived from wherever this script itself was loaded from, rather than hardcoded to '/api' —
+// so this same file works unchanged both standalone (served at a domain's root, e.g. on
+// Railway) and reverse-proxied under a path prefix (e.g. "/testtag/" on another site), without
+// needing two versions or a build step. document.currentScript.src is the resolved URL of this
+// <script> tag at the moment it runs; new URL('.', src) strips the filename, leaving the
+// directory this page's assets (and therefore its API) live under.
+const APP_BASE = (function () {
+  const src = document.currentScript && document.currentScript.src;
+  if (src) { try { return new URL('.', src).pathname; } catch (e) { /* fall through */ } }
+  return '/';
+})();
+const API = APP_BASE.replace(/\/$/, '') + '/api';
 let accessToken = localStorage.getItem('testTagAccessToken') || '';
 let currentAssetId = null;
 let currentPhotoBase64 = null;
