@@ -10,7 +10,14 @@ const APP_BASE = (function () {
   return '/';
 })();
 const API = APP_BASE.replace(/\/$/, '') + '/api';
-let accessToken = localStorage.getItem('testTagAccessToken') || '';
+// True when this page is being served from somewhere other than a domain root -- in practice,
+// that means the /testtag/ reverse proxy on the Audit Tool's Cloudflare project (see
+// functions/testtag/[[path]].js), which injects the real access token on every request server
+// side. Reaching Test & Tag this way already went through the Audit Tool's own login, so its
+// own separate token prompt is skipped entirely -- see ensureToken() below. Standalone hosting
+// (APP_BASE === '/', e.g. directly on Railway) is unaffected and keeps asking as before.
+const IS_PROXIED = APP_BASE !== '/';
+let accessToken = localStorage.getItem('testTagAccessToken') || (IS_PROXIED ? 'proxied' : '');
 let currentAssetId = null;
 let currentPhotoBase64 = null;
 let currentPhotoMediaType = null;
@@ -30,6 +37,7 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 
 // ---------- Access token gate ----------
 function ensureToken() {
+  if (IS_PROXIED) return; // the /testtag/ proxy already supplied the real token server side
   if (!accessToken) document.getElementById('tokenGate').style.display = 'block';
 }
 document.getElementById('tokenSaveBtn').addEventListener('click', () => {
@@ -44,10 +52,26 @@ document.getElementById('tokenSaveBtn').addEventListener('click', () => {
 function apiHeaders(extra = {}) { return { 'x-app-token': accessToken, ...extra }; }
 
 // ---------- Remembered tester ----------
-(function prefillTester() {
-  document.getElementById('t_tester_name').value = localStorage.getItem('testTagTesterName') || '';
-  document.getElementById('t_tester_licence').value = localStorage.getItem('testTagTesterLicence') || '';
-})();
+// When proxied under the Audit Tool (see IS_PROXIED above), this page shares an origin with it,
+// so the technician's own name/licence from their Cloud Sync login (cloudTechnicianName /
+// cloudTechnicianLicense -- set by the Audit Tool's own sync.js) is readable here directly. That
+// takes priority over Test & Tag's own separately-remembered tester, since it's already known
+// and correct for whoever's logged in right now -- no retyping needed. Falls back to Test & Tag's
+// own remembered values (or blank) whenever there's no active Audit Tool login to read, including
+// always on standalone hosting.
+function prefillTester() {
+  const nameEl = document.getElementById('t_tester_name');
+  const licenceEl = document.getElementById('t_tester_licence');
+  const cloudName = IS_PROXIED ? localStorage.getItem('cloudTechnicianName') : null;
+  if (cloudName) {
+    nameEl.value = cloudName;
+    licenceEl.value = localStorage.getItem('cloudTechnicianLicense') || '';
+  } else {
+    nameEl.value = localStorage.getItem('testTagTesterName') || '';
+    licenceEl.value = localStorage.getItem('testTagTesterLicence') || '';
+  }
+}
+prefillTester();
 function persistTester() {
   localStorage.setItem('testTagTesterName', document.getElementById('t_tester_name').value.trim());
   localStorage.setItem('testTagTesterLicence', document.getElementById('t_tester_licence').value.trim());
