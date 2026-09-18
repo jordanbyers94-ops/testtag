@@ -8,8 +8,13 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-aus">AUS</span><span class="brand-air">AIR</span><span class="brand-elec">ELECTRICAL</span></div>
-    <div class="app-title">Test &amp; Tag Register</div>
+    <div class="topbar-row">
+      <div>
+        <div class="brand"><span class="brand-aus">AUS</span><span class="brand-air">AIR</span><span class="brand-elec">ELECTRICAL</span></div>
+        <div class="app-title">Test &amp; Tag Register</div>
+      </div>
+      <button id="btnHomeTestTag" class="btn" style="display:none;" title="Back to the Audit Tool home screen">🏠 Home</button>
+    </div>
   </header>
   <div id="offlineBanner" class="offline-banner" style="display:none;">
     Offline — saves will queue and sync automatically once you're back online. <span id="queueCount"></span>

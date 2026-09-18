@@ -21,6 +21,8 @@ body {
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
 }
+.topbar-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.topbar-row .btn { margin-top: 0; padding: 8px 12px; font-size: 13px; white-space: nowrap; }
 .brand { font-weight: 700; font-size: 20px; letter-spacing: 1px; }
 .brand-aus { color: var(--aus-orange); }
 .brand-air { color: var(--aus-black); }

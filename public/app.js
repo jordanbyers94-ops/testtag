@@ -18,6 +18,19 @@ const API = APP_BASE.replace(/\/$/, '') + '/api';
 // (APP_BASE === '/', e.g. directly on Railway) is unaffected and keeps asking as before.
 const IS_PROXIED = APP_BASE !== '/';
 let accessToken = localStorage.getItem('testTagAccessToken') || (IS_PROXIED ? 'proxied' : '');
+
+// ---------- Home button (only meaningful when reached via the Audit Tool's proxy) ----------
+// Standalone hosting (e.g. directly on Railway) has no "home" to go back to, so this only
+// shows up when proxied under the Audit Tool -- APP_BASE is then something like "/testtag/",
+// and the Audit Tool's own app lives one level up, at the domain root.
+(function initHomeButton() {
+  if (!IS_PROXIED) return;
+  const btn = document.getElementById('btnHomeTestTag');
+  if (!btn) return;
+  btn.style.display = 'inline-block';
+  const homeUrl = new URL('../', window.location.href).pathname;
+  btn.addEventListener('click', () => { window.location.href = homeUrl; });
+})();
 let currentAssetId = null;
 let currentAssetIsTemp = false; // true while currentAssetId is a client-side tempId (offline, not yet synced)
 let currentPhotoBase64 = null;
