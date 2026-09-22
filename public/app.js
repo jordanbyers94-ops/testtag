@@ -31,6 +31,21 @@ let accessToken = localStorage.getItem('testTagAccessToken') || (IS_PROXIED ? 'p
   const homeUrl = new URL('../', window.location.href).pathname;
   btn.addEventListener('click', () => { window.location.href = homeUrl; });
 })();
+
+// ---------- Cloud report upload (only meaningful when proxied under the Audit Tool) ----------
+// "Upload Report to Cloud" and the "View all uploaded Test & Tag reports" link both need the
+// Cloudflare-side /api/testtag-reports endpoint, which only exists on the Audit Tool's own
+// domain -- so both are hidden entirely on standalone hosting (e.g. directly on Railway).
+function getCloudToken() {
+  const exp = Number(localStorage.getItem('cloudTokenExpiresAt') || 0);
+  if (!exp || Date.now() > exp) return null;
+  return localStorage.getItem('cloudToken');
+}
+(function initCloudReportsLink() {
+  if (!IS_PROXIED) return;
+  const wrap = document.getElementById('cloudReportsLinkWrap');
+  if (wrap) wrap.style.display = 'block';
+})();
 let currentAssetId = null;
 let currentAssetIsTemp = false; // true while currentAssetId is a client-side tempId (offline, not yet synced)
 let currentPhotoBase64 = null;
@@ -893,6 +908,11 @@ document.getElementById('exportBtn').addEventListener('click', () => {
 });
 
 // ---------- Generate Report (the client-facing "Test Register" .docx, per site+visit) ----------
+// Holds the most recently generated report's blob + the site/test date it covers, so "Upload
+// Report to Cloud" can re-send the SAME bytes the technician just downloaded rather than
+// re-generating them -- cleared every time the modal is (re)opened so a stale report can never
+// be uploaded under a different site/date by mistake.
+let lastGeneratedReport = null;
 function formatDMY(isoDate) {
   if (!isoDate) return '';
   const d = new Date(isoDate + 'T00:00:00Z');
@@ -913,6 +933,9 @@ document.getElementById('reportBtn').addEventListener('click', async () => {
   document.getElementById('reportSiteDisplay').value = site;
   select.innerHTML = '<option>Loading...</option>';
   generateBtn.disabled = true;
+  lastGeneratedReport = null;
+  document.getElementById('uploadReportCloudBtn').style.display = 'none';
+  document.getElementById('uploadReportCloudStatus').textContent = '';
   document.getElementById('reportModal').style.display = 'flex';
 
   try {
@@ -960,8 +983,51 @@ document.getElementById('generateReportBtn').addEventListener('click', async () 
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
     statusEl.textContent = 'Downloaded.'; statusEl.className = 'status ok';
+
+    lastGeneratedReport = { blob, site, testDate };
+    const uploadBtn = document.getElementById('uploadReportCloudBtn');
+    if (IS_PROXIED) {
+      uploadBtn.style.display = 'inline-block';
+      uploadBtn.disabled = !getCloudToken();
+      uploadBtn.textContent = 'Upload Report to Cloud';
+      document.getElementById('uploadReportCloudStatus').textContent = getCloudToken()
+        ? '' : 'Log into the Audit Tool\'s Cloud Sync first to upload reports.';
+    }
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`; statusEl.className = 'status err';
+  }
+});
+
+document.getElementById('uploadReportCloudBtn').addEventListener('click', async () => {
+  const uploadBtn = document.getElementById('uploadReportCloudBtn');
+  const uploadStatusEl = document.getElementById('uploadReportCloudStatus');
+  if (!lastGeneratedReport) { uploadStatusEl.textContent = 'Generate the report first.'; uploadStatusEl.className = 'status err'; return; }
+  const token = getCloudToken();
+  if (!token) { uploadStatusEl.textContent = 'Log into the Audit Tool\'s Cloud Sync first to upload reports.'; uploadStatusEl.className = 'status err'; return; }
+
+  uploadBtn.disabled = true;
+  uploadStatusEl.textContent = 'Uploading…'; uploadStatusEl.className = 'status';
+  try {
+    const form = new FormData();
+    form.append('docx', lastGeneratedReport.blob, 'report.docx');
+    form.append('site', lastGeneratedReport.site);
+    form.append('testDate', lastGeneratedReport.testDate);
+    form.append('deviceLabel', navigator.userAgent.slice(0, 120));
+    // Root-relative: this page is reverse-proxied under the Audit Tool's own domain when
+    // IS_PROXIED is true (see APP_BASE above), so this always shares the same origin as
+    // /api/testtag-reports regardless of the proxy path Test & Tag itself is mounted at.
+    const res = await fetch('/api/testtag-reports', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    uploadStatusEl.textContent = 'Uploaded to the cloud.'; uploadStatusEl.className = 'status ok';
+    uploadBtn.textContent = 'Uploaded ✓';
+  } catch (err) {
+    uploadStatusEl.textContent = `Error: ${err.message}`; uploadStatusEl.className = 'status err';
+    uploadBtn.disabled = false;
   }
 });
 
