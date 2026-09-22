@@ -1,0 +1,12 @@
+{
+  "name": "Aus Air Electrical - Test & Tag",
+  "short_name": "Test & Tag",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f5f7",
+  "theme_color": "#f5a623",
+  "icons": [
+    { "src": "icon.png", "sizes": "87x77", "type": "image/png", "purpose": "any" }
+  ]
+}

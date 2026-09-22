@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Aus Air Electrical — Test &amp; Tag</title>
+<link rel="stylesheet" href="./style.css" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="icon" href="./icon.png" />
+<link rel="apple-touch-icon" href="./icon.png" />
+<meta name="theme-color" content="#f5a623" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-row">
+      <div>
+        <div class="brand"><span class="brand-aus">AUS</span><span class="brand-air">AIR</span><span class="brand-elec">ELECTRICAL</span></div>
+        <div class="app-title">Test &amp; Tag Register</div>
+      </div>
+      <button id="btnHomeTestTag" class="btn" style="display:none;" title="Back to the Audit Tool home screen">🏠 Home</button>
+    </div>
+  </header>
+  <div id="offlineBanner" class="offline-banner" style="display:none;">
+    <span id="offlineBannerText">Offline — saves will queue and sync automatically once you're back online.</span>
+    <button id="syncNowBtn" class="btn btn-primary" style="display:none;">Upload to Cloud</button>
+  </div>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="scan">Scan Tag</button>
+    <button class="tab-btn" data-tab="register">Register</button>
+    <button class="tab-btn" data-tab="due">Due</button>
+  </nav>
+
+  <main id="app">
+    <!-- SCAN TAB -->
+    <section id="tab-scan" class="tab-panel active">
+      <div id="retestBanner" class="notice" style="display:none;"></div>
+      <div id="tokenGate" class="card" style="display:none;">
+        <h3>Access token</h3>
+        <p>Enter the shared team access token to use this app.</p>
+        <input id="tokenInput" type="password" placeholder="Access token" />
+        <button id="tokenSaveBtn" class="btn btn-primary">Save</button>
+      </div>
+
+      <div class="card">
+        <h3>Site</h3>
+        <label>Site / Client *
+          <input id="siteInput" list="siteOptions" type="text" placeholder="e.g. Holy Spirit Catholic Primary School" />
+          <datalist id="siteOptions"></datalist>
+        </label>
+        <label>Location <span class="hint">(area within the site, e.g. Tuckshop)</span>
+          <input id="locationInput" type="text" />
+        </label>
+        <label>Environment category <span class="hint">(sets the default retest interval)</span>
+          <select id="categoryInput">
+            <option value="">— not set —</option>
+            <option value="construction">Construction site (3 months)</option>
+            <option value="hostile">Hostile environment (3 months)</option>
+            <option value="commercial_kitchen">Commercial kitchen (6 months)</option>
+            <option value="factory_workshop">Factory / workshop (6 months)</option>
+            <option value="office_low_risk">Office / low-risk (5 years)</option>
+            <option value="other">Other (12 months)</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="card">
+        <h3>Photograph the test tag / nameplate</h3>
+        <input id="photoInput" type="file" accept="image/*" capture="environment" />
+        <div id="preview"></div>
+        <button id="extractBtn" class="btn btn-primary" disabled>Read Tag</button>
+        <button id="skipExtractBtn" class="btn">Enter manually instead</button>
+        <div id="extractStatus" class="status"></div>
+      </div>
+
+      <div id="resultCard" class="card" style="display:none;">
+        <h3>Confirm asset details</h3>
+        <label>Appliance<input id="f_appliance" type="text" /></label>
+        <label>Plant No.<input id="f_plant_no" type="text" /></label>
+        <label>Brand<input id="f_brand" type="text" /></label>
+        <label>Model No.<input id="f_model_no" type="text" /></label>
+        <label>Serial No.<input id="f_serial_no" type="text" /></label>
+        <div id="existingNotice" class="notice" style="display:none;"></div>
+        <button id="saveAssetBtn" class="btn btn-primary">Save to Register</button>
+      </div>
+
+      <div id="testCard" class="card" style="display:none;">
+        <h3>Log test result</h3>
+        <label>Tag No. <span class="hint">(new tag applied this cycle)</span><input id="t_tag_no" type="text" /></label>
+        <label>Tester Name<input id="t_tester_name" type="text" /></label>
+        <label>Tester Licence<input id="t_tester_licence" type="text" /></label>
+        <label>Result *
+          <select id="t_result">
+            <option value="pass">Pass</option>
+            <option value="fail">Fail</option>
+          </select>
+        </label>
+        <label>Test Date<input id="t_test_date" type="date" /></label>
+        <label>Next Due <span class="hint">(auto-filled from environment category if left blank)</span><input id="t_next_due" type="date" /></label>
+        <label>Notes<textarea id="t_notes" rows="2"></textarea></label>
+        <button id="saveTestBtn" class="btn btn-success">Log Test</button>
+        <div id="testStatus" class="status"></div>
+      </div>
+    </section>
+
+    <!-- REGISTER TAB -->
+    <section id="tab-register" class="tab-panel">
+      <div class="card">
+        <div class="register-toolbar">
+          <input id="siteFilter" list="siteOptionsRegister" type="text" placeholder="Filter by site..." />
+          <datalist id="siteOptionsRegister"></datalist>
+          <input id="searchInput" type="text" placeholder="Search plant no., appliance, location, serial..." />
+        </div>
+        <div class="register-toolbar">
+          <button id="filterAllBtn" class="btn chip active">All</button>
+          <button id="filterFailBtn" class="btn chip">Fails only</button>
+          <button id="filterOverdueBtn" class="btn chip">Overdue</button>
+          <button id="filterSoonBtn" class="btn chip">Due soon</button>
+        </div>
+        <div class="register-toolbar">
+          <button id="renameSiteBtn" class="btn">Rename current site filter</button>
+        </div>
+        <div class="register-toolbar">
+          <button id="refreshBtn" class="btn">Refresh</button>
+          <button id="exportBtn" class="btn btn-primary">Export .xlsx</button>
+          <button id="reportBtn" class="btn btn-primary">Generate Report</button>
+          <label class="btn" for="importInput">Import Register</label>
+          <input id="importInput" type="file" accept=".xlsx,.xls,.csv" style="display:none;" />
+        </div>
+        <div id="importStatus" class="status"></div>
+        <div id="registerList"></div>
+      </div>
+    </section>
+
+    <!-- DUE TAB -->
+    <section id="tab-due" class="tab-panel">
+      <div class="card">
+        <h3>Sites needing attention</h3>
+        <p class="hint">Overdue and due-within-30-days counts, by site. Tap a site to jump to its register.</p>
+        <div id="dueSummary"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Test history / edit modal -->
+  <div id="historyModal" class="modal" style="display:none;">
+    <div class="modal-inner">
+      <div class="modal-header">
+        <h3 id="historyModalTitle">Test history</h3>
+        <button id="closeHistoryModal" class="btn">Close</button>
+      </div>
+      <div class="register-toolbar">
+        <button id="quickRetestBtn" class="btn btn-primary">Log New Test</button>
+        <button id="editAssetBtn" class="btn">Edit Item</button>
+        <button id="deleteAssetBtn" class="btn-danger">Delete Item</button>
+      </div>
+      <div id="editAssetForm" class="card" style="display:none;margin-top:10px;">
+        <label>Site<input id="edit_site" type="text" /></label>
+        <label>Location<input id="edit_location" type="text" /></label>
+        <label>Appliance<input id="edit_appliance" type="text" /></label>
+        <label>Plant No.<input id="edit_plant_no" type="text" /></label>
+        <label>Brand<input id="edit_brand" type="text" /></label>
+        <label>Model No.<input id="edit_model_no" type="text" /></label>
+        <label>Serial No.<input id="edit_serial_no" type="text" /></label>
+        <div class="register-toolbar">
+          <button id="saveAssetEditBtn" class="btn btn-primary">Save Changes</button>
+          <button id="cancelAssetEditBtn" class="btn">Cancel</button>
+        </div>
+        <div id="editAssetStatus" class="status"></div>
+      </div>
+      <div id="historyList"></div>
+    </div>
+  </div>
+
+  <!-- Generate Report modal -->
+  <div id="reportModal" class="modal" style="display:none;">
+    <div class="modal-inner">
+      <div class="modal-header">
+        <h3>Generate Test Register Report</h3>
+        <button id="closeReportModal" class="btn">Close</button>
+      </div>
+      <p class="hint">Produces the same "Test Register" report Aus Air sends to clients — cover page, inspection summary, and the full item-by-item register — for one site's visit.</p>
+      <label>Site<input id="reportSiteDisplay" type="text" disabled /></label>
+      <label>Visit date <span class="hint">(which test date to report on)</span>
+        <select id="reportDateSelect"></select>
+      </label>
+      <button id="generateReportBtn" class="btn btn-primary">Generate .docx</button>
+      <div id="reportModalStatus" class="status"></div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
