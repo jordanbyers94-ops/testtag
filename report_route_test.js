@@ -95,6 +95,12 @@ const server = app.listen(0, async () => {
     check('Report document mentions a passed item tag', xml.includes('TAG-101'));
     check('Report document mentions the failed item', xml.includes('Drop Saw') || xml.includes('Makita'));
     check('Report document counts reflect 1 pass, 1 fail, 1 unfound (of 3 site items)', /\b1\b[\s\S]{0,40}pass/i.test(xml) || xml.toLowerCase().includes('unfound'));
+    check('Report no longer mentions RCD (Test & Tag covers portable equipment only)', !xml.toLowerCase().includes('rcd'));
+    check('Register table has a Location column with the asset locations', xml.includes('North end') && xml.includes('South end'));
+
+    const mediaList = execSync(`unzip -l "${tmpFile}"`).toString('utf8');
+    const mediaImages = (mediaList.match(/word\/media\/[^\s/]+\.\w+/g) || []).length;
+    check('Cover page embeds both the logo and the diagonal banner graphic', mediaImages >= 2);
 
     res = await fetch(`${base}/report?site=${encodeURIComponent('No Such Site')}&test_date=2026-03-06`);
     check('/report 404 for site with no register items', res.status === 404);

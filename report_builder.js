@@ -5,8 +5,11 @@
 const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   AlignmentType, WidthType, Footer, PageBreak, ShadingType, VerticalAlign, ImageRun,
+  HorizontalPositionAlign, VerticalPositionAlign, HorizontalPositionRelativeFrom,
+  VerticalPositionRelativeFrom, TextWrappingType,
 } = require('docx');
 const LOGO_BASE64 = require('./report_logo');
+const BANNER_BASE64 = require('./report_banner');
 
 const BRAND_ORANGE = 'F5A623';
 const BRAND_BLACK = '1A1A1A';
@@ -102,9 +105,35 @@ function scopeNarrative({ scopeType, scopeValue }) {
   return scopeType === 'job_number' ? `Job Number ${scopeValue}` : scopeValue;
 }
 
+// Decorative gold/yellow diagonal banner across the top of the cover page only, matching Aus
+// Air's existing report template. Floated and page-anchored (rather than placed inline) so it
+// bleeds across the full page width regardless of the section's left/right margins, and
+// zIndex'd behind the logo/title text that follows it in reading order.
+function buildBanner() {
+  return new Paragraph({
+    children: [
+      new ImageRun({
+        type: 'png',
+        data: Buffer.from(BANNER_BASE64, 'base64'),
+        // Page width is A4 (11906 twips = 793.7px @96dpi) -- sized to bleed the full page width,
+        // height kept at the source PNG's aspect ratio (1654x330).
+        transformation: { width: 794, height: 158 },
+        floating: {
+          horizontalPosition: { relative: HorizontalPositionRelativeFrom.PAGE, align: HorizontalPositionAlign.LEFT },
+          verticalPosition: { relative: VerticalPositionRelativeFrom.PAGE, align: VerticalPositionAlign.TOP },
+          wrap: { type: TextWrappingType.NONE },
+          behindDocument: true,
+          allowOverlap: true,
+        },
+      }),
+    ],
+  });
+}
+
 function buildCoverPage({ testDate, scopeType, scopeValue, clientName }) {
   const narrative = scopeNarrative({ scopeType, scopeValue });
   return [
+    buildBanner(),
     new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing: { before: 1600, after: 150 },
@@ -146,7 +175,7 @@ function buildCoverPage({ testDate, scopeType, scopeValue, clientName }) {
     }),
     new Paragraph({
       children: [new TextRun({
-        text: `Testing and tagging of portable electrical equipment, together with RCD push-button testing, was carried out in accordance with AS 3760:2022 at ${narrative} on ${formatLong(testDate)}.`,
+        text: `Testing and tagging of portable electrical equipment was carried out in accordance with AS/NZS 3760:2022 at ${narrative} on ${formatLong(testDate)}.`,
         size: 22,
       })],
     }),
@@ -266,9 +295,13 @@ function cell(text, alignment, color) {
 }
 
 function buildRegisterTable({ assets, testByAssetId }) {
+  // Site and Location are included as their own columns (rather than just in the cover-page
+  // narrative) so the register is self-contained when scoped by Job Number -- a job can span
+  // multiple sites/vehicles, so each row needs to say which site/location it came from -- and so
+  // a within-site reader can still see at a glance where at the site each item lives.
   const headerRow = new TableRow({
     tableHeader: true,
-    children: ['Plant No.', 'Plant Description', 'Tag No.', 'Pass/Fail', 'Test Date', 'Next Due'].map((h) => new TableCell({
+    children: ['Site', 'Location', 'Plant No.', 'Plant Description', 'Tag No.', 'Pass/Fail', 'Test Date', 'Next Due'].map((h) => new TableCell({
       shading: { fill: BRAND_ORANGE, type: ShadingType.CLEAR, color: 'auto' },
       verticalAlign: VerticalAlign.CENTER,
       margins: { top: 60, bottom: 60, left: 80, right: 80 },
@@ -288,6 +321,8 @@ function buildRegisterTable({ assets, testByAssetId }) {
     const resultColor = t ? (t.result === 'fail' ? FAIL_RED : undefined) : UNFOUND_GRAY;
     const tagText = t && t.tag_no ? t.tag_no : '—';
     rows.push(new TableRow({ children: [
+      cell(a.site || '—'),
+      cell(a.location || '—'),
       cell(a.plant_no || '—', AlignmentType.CENTER),
       cell(a.appliance || '—'),
       cell(tagText, AlignmentType.CENTER),
