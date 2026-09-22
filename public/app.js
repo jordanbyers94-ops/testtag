@@ -329,18 +329,40 @@ async function flushQueue() {
 window.addEventListener('online', () => { updateOfflineBanner(); flushQueue(); });
 window.addEventListener('offline', updateOfflineBanner);
 
-// ---------- Site autocomplete ----------
+// ---------- Site autocomplete + remembered Client Name ----------
+// site name (lowercased) -> client name, so the Scan tab can auto-fill Client Name once a
+// technician picks/types a Site that's already on file -- one less thing to retype on every
+// return visit to the same site.
+let siteClientNames = {};
+
 async function loadSiteOptions() {
   if (!navigator.onLine) return;
   try {
     const res = await fetch(`${API}/assets/sites`, { headers: apiHeaders() });
     if (!res.ok) return;
     const sites = await res.json();
-    const opts = sites.map((s) => `<option value="${escapeHtml(s)}"></option>`).join('');
+    const opts = sites.map((s) => `<option value="${escapeHtml(s.name)}"></option>`).join('');
     document.getElementById('siteOptions').innerHTML = opts;
     document.getElementById('siteOptionsRegister').innerHTML = opts;
+    siteClientNames = {};
+    sites.forEach((s) => { if (s.client_name) siteClientNames[s.name.toLowerCase()] = s.client_name; });
   } catch (e) { /* non-fatal */ }
 }
+
+// Auto-fills Client Name from the remembered value for the typed/picked Site, but only when
+// Client Name is currently empty -- never overwrites something the technician already typed
+// (e.g. a one-off client name for a site normally used by someone else).
+function autofillClientNameFromSite() {
+  const site = document.getElementById('siteInput').value.trim();
+  const clientNameInput = document.getElementById('clientNameInput');
+  if (!site || clientNameInput.value.trim()) return;
+  const remembered = siteClientNames[site.toLowerCase()];
+  if (remembered) clientNameInput.value = remembered;
+}
+document.getElementById('siteInput').addEventListener('change', autofillClientNameFromSite);
+// 'input' also fires when a datalist option is clicked/selected (unlike 'change' alone in some
+// browsers), so this covers picking from the dropdown as well as typing then tabbing away.
+document.getElementById('siteInput').addEventListener('input', autofillClientNameFromSite);
 
 // ---------- Photo capture / extraction ----------
 const photoInput = document.getElementById('photoInput');

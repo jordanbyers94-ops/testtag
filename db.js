@@ -35,6 +35,10 @@ async function initDb() {
     );
   `);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sites_name_lower ON sites (LOWER(name));`);
+  // Client Name remembered per site (e.g. "Holy Spirit Catholic Primary School" for whichever
+  // site that school is), so a technician only has to type it once per site -- the Scan tab
+  // auto-fills it from here on later visits. Older deployments won't have this column yet.
+  await pool.query(`ALTER TABLE sites ADD COLUMN IF NOT EXISTS client_name TEXT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS assets (

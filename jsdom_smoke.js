@@ -25,7 +25,7 @@ function makeFetch() {
     const ok = (body) => ({ ok: true, status: 200, json: async () => body, blob: async () => ({}) });
     const notFound = (body) => ({ ok: false, status: 404, json: async () => body });
 
-    if (path === '/assets/sites') return ok(['Holy Spirit Primary']);
+    if (path === '/assets/sites') return ok([{ name: 'Holy Spirit Primary', client_name: 'Holy Spirit Catholic Primary School' }]);
     if (path.match(/^\/assets\/\d+$/) && method === 'GET') {
       const id = Number(path.split('/')[2]);
       const a = assets.find(x => x.id === id);
@@ -85,6 +85,23 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
     el.value = val;
     el.dispatchEvent(new window.Event('input', { bubbles: true }));
   }
+
+  // ---------- Site remembers Client Name (Scan tab, default-active on load) ----------
+  setVal('siteInput', 'Holy Spirit Primary');
+  await wait(100);
+  const autofilled = doc.getElementById('clientNameInput').value;
+  console.log('Client Name auto-filled from remembered site:', autofilled);
+  if (autofilled !== 'Holy Spirit Catholic Primary School') errors.push(`Client Name did not auto-fill from the remembered site (got "${autofilled}")`);
+
+  // Doesn't clobber a client name the technician already typed for a one-off/different client.
+  setVal('siteInput', '');
+  setVal('clientNameInput', 'A Different Client');
+  setVal('siteInput', 'Holy Spirit Primary');
+  await wait(100);
+  const notOverwritten = doc.getElementById('clientNameInput').value;
+  console.log('Client Name NOT overwritten when already filled in:', notOverwritten);
+  if (notOverwritten !== 'A Different Client') errors.push(`An already-filled Client Name was overwritten (got "${notOverwritten}")`);
+  setVal('clientNameInput', ''); // reset for the rest of the scenarios below
 
   doc.querySelector('.tab-btn[data-tab="register"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await wait(300);

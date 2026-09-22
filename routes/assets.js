@@ -8,20 +8,37 @@ function addMonths(dateStr, months) {
   return d.toISOString().slice(0, 10);
 }
 
+// Registers a site (if it isn't already known) and, when a client name is given, remembers it
+// against that site -- overwriting whatever was remembered before, since a non-empty value here
+// means the technician just typed/confirmed it for this visit. A blank/missing clientName never
+// clears an already-remembered one (COALESCE keeps the existing value), so this is safe to call
+// on every asset save without a client name field wiping out what's on file.
+async function upsertSite(name, clientName) {
+  await pool.query(
+    `
+    INSERT INTO sites (name, client_name) VALUES ($1, $2)
+    ON CONFLICT (LOWER(name)) DO UPDATE SET client_name = COALESCE(EXCLUDED.client_name, sites.client_name)
+    `,
+    [name, clientName || null]
+  );
+}
+
 // ---------- Sites ----------
 
-// GET /api/assets/sites - list of known sites (from the sites registry, falling
-// back to distinct values already on assets for older rows created before a
-// site was formally registered).
+// GET /api/assets/sites - known sites, each with whatever client name is remembered for it (the
+// Scan tab uses this to auto-fill Client Name once a known Site is picked/typed). Falls back to
+// distinct site values already on assets, for older rows created before a site was formally
+// registered -- those just won't have a remembered client name yet, which is fine.
 router.get('/sites', async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT name FROM sites
+      SELECT name, client_name FROM sites
       UNION
-      SELECT DISTINCT site AS name FROM assets
+      SELECT DISTINCT site AS name, NULL AS client_name FROM assets
+        WHERE LOWER(site) NOT IN (SELECT LOWER(name) FROM sites)
       ORDER BY name ASC
     `);
-    res.json(rows.map((r) => r.name));
+    res.json(rows.map((r) => ({ name: r.name, client_name: r.client_name || null })));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to load sites.' });
@@ -29,12 +46,12 @@ router.get('/sites', async (req, res) => {
 });
 
 // POST /api/assets/sites - register a new site explicitly (also happens implicitly
-// whenever an asset is saved with a new site name).
+// whenever an asset is saved with a new site name), optionally remembering its client name.
 router.post('/sites', async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, client_name } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'name is required.' });
-    await pool.query('INSERT INTO sites (name) VALUES ($1) ON CONFLICT (LOWER(name)) DO NOTHING', [name.trim()]);
+    await upsertSite(name.trim(), client_name ? client_name.trim() : null);
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -45,15 +62,19 @@ router.post('/sites', async (req, res) => {
 // PATCH /api/assets/sites/:oldName - rename/merge a site. Updates every asset
 // under the old name (case-insensitive match) to the new name. Use this to fix
 // spelling variants that crept in before the case-insensitive matching landed.
+// Carries over whatever client name was remembered under the old name.
 router.patch('/sites/:oldName', async (req, res) => {
   try {
     const { newName } = req.body;
     if (!newName || !newName.trim()) return res.status(400).json({ error: 'newName is required.' });
     const oldName = req.params.oldName;
 
+    const existing = await pool.query('SELECT client_name FROM sites WHERE LOWER(name) = LOWER($1)', [oldName]);
+    const carriedClientName = existing.rows[0] ? existing.rows[0].client_name : null;
+
     await pool.query('UPDATE assets SET site = $1, updated_at = now() WHERE LOWER(site) = LOWER($2)', [newName.trim(), oldName]);
     await pool.query('DELETE FROM sites WHERE LOWER(name) = LOWER($1)', [oldName]);
-    await pool.query('INSERT INTO sites (name) VALUES ($1) ON CONFLICT (LOWER(name)) DO NOTHING', [newName.trim()]);
+    await upsertSite(newName.trim(), carriedClientName);
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -227,7 +248,7 @@ router.patch('/:id', async (req, res) => {
     const { site, location, appliance, plant_no, brand, model_no, serial_no, environment_category, notes, client_name, job_number } = req.body;
     if (!site || !site.trim()) return res.status(400).json({ error: 'site is required.' });
 
-    await pool.query('INSERT INTO sites (name) VALUES ($1) ON CONFLICT (LOWER(name)) DO NOTHING', [site.trim()]);
+    await upsertSite(site.trim(), client_name ? client_name.trim() : null);
 
     const { rows } = await pool.query(
       `
@@ -287,7 +308,7 @@ router.post('/', async (req, res) => {
     const { site, location, appliance, plant_no, brand, model_no, serial_no, environment_category, notes, client_name, job_number } = req.body;
     if (!site) return res.status(400).json({ error: 'site is required.' });
 
-    await pool.query('INSERT INTO sites (name) VALUES ($1) ON CONFLICT (LOWER(name)) DO NOTHING', [site]);
+    await upsertSite(site, client_name ? String(client_name).trim() : null);
 
     let existing = null;
     if (plant_no) {

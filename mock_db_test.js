@@ -34,13 +34,26 @@ const mockPool = {
   async query(sql, params = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
 
-    if (s.startsWith('SELECT name FROM sites')) {
-      const names = new Set([...sites, ...assets.map(a => a.site)]);
-      return { rows: [...names].sort().map(name => ({ name })) };
+    // sites is now an array of { name, client_name } -- client_name is the value remembered
+    // for that site (from whichever asset save most recently supplied one), mirroring the real
+    // sites.client_name column added alongside this test.
+    if (s.startsWith('SELECT name, client_name FROM sites')) {
+      const bySite = {};
+      sites.forEach((site) => { bySite[site.name.toLowerCase()] = { name: site.name, client_name: site.client_name || null }; });
+      assets.forEach((a) => { const key = a.site.toLowerCase(); if (!bySite[key]) bySite[key] = { name: a.site, client_name: null }; });
+      return { rows: Object.values(bySite).sort((a, b) => a.name.localeCompare(b.name)) };
+    }
+    if (s.startsWith('SELECT client_name FROM sites WHERE LOWER(name) = LOWER($1)')) {
+      const site = sites.find(x => x.name.toLowerCase() === (params[0] || '').toLowerCase());
+      return { rows: site ? [{ client_name: site.client_name || null }] : [] };
     }
     if (s.startsWith("INSERT INTO sites")) {
-      const name = params[0];
-      if (!sites.some(x => x.toLowerCase() === name.toLowerCase())) sites.push(name);
+      // upsertSite(name, clientName): a non-null clientName overwrites what was remembered for
+      // that site; a null/omitted one leaves the existing remembered value untouched.
+      const [name, clientName] = params;
+      const existing = sites.find(x => x.name.toLowerCase() === name.toLowerCase());
+      if (existing) { if (clientName != null) existing.client_name = clientName; }
+      else sites.push({ name, client_name: clientName != null ? clientName : null });
       return { rows: [] };
     }
     if (s.startsWith('UPDATE assets SET site = $1, updated_at = now() WHERE LOWER(site)')) {
@@ -49,7 +62,7 @@ const mockPool = {
       return { rows: [] };
     }
     if (s.startsWith('DELETE FROM sites')) {
-      sites = sites.filter(x => x.toLowerCase() !== params[0].toLowerCase());
+      sites = sites.filter(x => x.name.toLowerCase() !== params[0].toLowerCase());
       return { rows: [] };
     }
 
@@ -260,6 +273,28 @@ async function run() {
 
     r = await req('DELETE', '/api/assets/999999');
     assertEqual(r.status, 404, 'DELETE /assets/:id 404 for missing');
+
+    // ---------- Site remembers Client Name across saves ----------
+    r = await req('POST', '/api/assets', { site: 'Riverside Park', location: 'Kiosk', appliance: 'Fridge', plant_no: '1', client_name: 'Riverside Community Centre' });
+    assertEqual(r.status, 200, 'POST /assets (new site with client_name) status');
+
+    r = await req('GET', '/api/assets/sites');
+    let site = r.body.find(s => s.name === 'Riverside Park');
+    assertTrue(!!site, 'GET /assets/sites includes the new site');
+    assertEqual(site && site.client_name, 'Riverside Community Centre', 'GET /assets/sites remembers the client_name given on first save');
+
+    // A second asset saved for the same site with NO client_name shouldn't wipe out what's remembered.
+    r = await req('POST', '/api/assets', { site: 'Riverside Park', location: 'Clubhouse', appliance: 'Fan', plant_no: '2' });
+    assertEqual(r.status, 200, 'POST /assets (same site, no client_name) status');
+    r = await req('GET', '/api/assets/sites');
+    site = r.body.find(s => s.name === 'Riverside Park');
+    assertEqual(site && site.client_name, 'Riverside Community Centre', 'A blank client_name on a later save does not clear the remembered one');
+
+    // A later save WITH a client_name updates what's remembered (technician correcting it).
+    r = await req('POST', '/api/assets', { site: 'Riverside Park', location: 'Kiosk', appliance: 'Fridge', plant_no: '1', client_name: 'Riverside Community Centre Inc.' });
+    r = await req('GET', '/api/assets/sites');
+    site = r.body.find(s => s.name === 'Riverside Park');
+    assertEqual(site && site.client_name, 'Riverside Community Centre Inc.', 'A later non-empty client_name overwrites the remembered one');
 
   } catch (e) {
     console.log('ERROR during test run:', e);
