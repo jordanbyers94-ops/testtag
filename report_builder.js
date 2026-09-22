@@ -310,14 +310,26 @@ function cell(text, alignment, color) {
   });
 }
 
+// Natural-ish compare so "Location 2" sorts before "Location 10" instead of after -- plant
+// numbers and location names both commonly carry trailing numbers.
+function compareText(a, b) {
+  return String(a || '').localeCompare(String(b || ''), undefined, { numeric: true, sensitivity: 'base' });
+}
+
 function buildRegisterTable({ assets, testByAssetId }) {
   // Site and Location are included as their own columns (rather than just in the cover-page
   // narrative) so the register is self-contained when scoped by Job Number -- a job can span
   // multiple sites/vehicles, so each row needs to say which site/location it came from -- and so
   // a within-site reader can still see at a glance where at the site each item lives.
+  //
+  // Rows are grouped by Location first (then Site, then Plant No. as tiebreakers) rather than
+  // left in whatever order they were scanned/entered in, so everything from the same room/area
+  // sits together and a technician working through a site physically can follow the register
+  // top-to-bottom instead of hunting for their current location scattered through the list.
+  // Location leads the columns too, to match what the rows are actually grouped by.
   const headerRow = new TableRow({
     tableHeader: true,
-    children: ['Site', 'Location', 'Plant No.', 'Plant Description', 'Tag No.', 'Result', 'Test Date', 'Next Due'].map((h) => new TableCell({
+    children: ['Location', 'Site', 'Plant No.', 'Plant Description', 'Tag No.', 'Result', 'Test Date', 'Next Due'].map((h) => new TableCell({
       shading: { fill: BRAND_ORANGE, type: ShadingType.CLEAR, color: 'auto' },
       verticalAlign: VerticalAlign.CENTER,
       margins: { top: 60, bottom: 60, left: 80, right: 80 },
@@ -328,8 +340,14 @@ function buildRegisterTable({ assets, testByAssetId }) {
     })),
   });
 
+  const sortedAssets = [...assets].sort((a, b) => (
+    compareText(a.location, b.location)
+    || compareText(a.site, b.site)
+    || compareText(a.plant_no, b.plant_no)
+  ));
+
   const rows = [headerRow];
-  for (const a of assets) {
+  for (const a of sortedAssets) {
     const t = testByAssetId[a.id];
     const resultText = t ? (t.result === 'fail' ? 'Fail' : t.result === 'repairable' ? 'Repairable' : 'Pass') : 'Unfound';
     const testDateText = t ? formatDMY(t.test_date) : 'N/A';
@@ -337,8 +355,8 @@ function buildRegisterTable({ assets, testByAssetId }) {
     const resultColor = t ? (t.result === 'fail' ? FAIL_RED : t.result === 'repairable' ? REPAIR_AMBER : undefined) : UNFOUND_GRAY;
     const tagText = t && t.tag_no ? t.tag_no : '—';
     rows.push(new TableRow({ children: [
-      cell(a.site || '—'),
       cell(a.location || '—'),
+      cell(a.site || '—'),
       cell(a.plant_no || '—', AlignmentType.CENTER),
       cell(a.appliance || '—'),
       cell(tagText, AlignmentType.CENTER),

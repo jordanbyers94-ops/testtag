@@ -20,11 +20,16 @@ const assets = [
   { id: 3, site: 'William Jolly Bridge', location: 'South end', appliance: 'Grinder', plant_no: '3', brand: 'Bosch', model_no: null, serial_no: null, environment_category: 'construction', notes: null },
   { id: 4, site: 'Other Site', location: 'Shed', appliance: 'Kettle', plant_no: '9', brand: 'Sunbeam', model_no: null, serial_no: null, environment_category: 'office_low_risk', notes: null },
   { id: 5, site: 'William Jolly Bridge', location: 'South end', appliance: 'Cable Reel', plant_no: '5', brand: 'HPM', model_no: null, serial_no: null, environment_category: 'construction', notes: null },
+  // Deliberately placed LAST in this array (after the South end items above) but belongs to
+  // North end -- exercises that the register groups rows by Location regardless of the order
+  // assets come back from the DB in, not just however they happened to be inserted/scanned.
+  { id: 6, site: 'William Jolly Bridge', location: 'North end', appliance: 'Vacuum', plant_no: '6', brand: 'Dyson', model_no: null, serial_no: null, environment_category: 'construction', notes: null },
 ];
 const testRecords = [
   { id: 1, asset_id: 1, test_date: '2026-03-06', tag_no: 'TAG-101', result: 'pass', next_due: '2026-06-06', created_at: new Date('2026-03-06T09:00:00Z') },
   { id: 2, asset_id: 2, test_date: '2026-03-06', tag_no: 'TAG-102', result: 'fail', next_due: null, created_at: new Date('2026-03-06T09:05:00Z') },
   { id: 3, asset_id: 5, test_date: '2026-03-06', tag_no: 'TAG-105', result: 'repairable', next_due: null, notes: 'damaged sheath', created_at: new Date('2026-03-06T09:10:00Z') },
+  { id: 4, asset_id: 6, test_date: '2026-03-06', tag_no: 'TAG-106', result: 'pass', next_due: '2026-06-06', created_at: new Date('2026-03-06T09:15:00Z') },
   // asset_id 3 has no test on 2026-03-06 -> should be reported "unfound"
 ];
 
@@ -102,6 +107,13 @@ const server = app.listen(0, async () => {
     check('Register table lists the repairable item as Repairable', xml.includes('Repairable') && xml.includes('TAG-105'));
     check('Details page has an Items Repairable section', xml.includes('Items Repairable'));
     check('Details page mentions the repairable item\'s reason', xml.includes('damaged sheath'));
+    // "Grinder" (the unfound item) also appears earlier in the Details page's "Items Unfound"
+    // list -- search only from the Register heading onward so this checks the table's own row
+    // order, not an unrelated earlier mention.
+    const registerIdx = xml.indexOf('>Register<');
+    check('Register heading is present', registerIdx > -1);
+    check('Register groups rows by Location, not DB/insertion order (North end item sorts ahead of South end items despite being fetched last)', xml.indexOf('TAG-106', registerIdx) > -1 && xml.indexOf('TAG-106', registerIdx) < xml.indexOf('Grinder', registerIdx));
+    check('Register header leads with Location (columns organised by location)', xml.indexOf('Location', registerIdx) < xml.indexOf('Plant Description', registerIdx));
 
     const mediaList = execSync(`unzip -l "${tmpFile}"`).toString('utf8');
     const mediaImages = (mediaList.match(/word\/media\/[^\s/]+\.\w+/g) || []).length;
