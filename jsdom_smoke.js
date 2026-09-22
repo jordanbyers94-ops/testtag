@@ -133,11 +133,18 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
   console.log('Test card shown for quick retest:', doc.getElementById('testCard').style.display === 'block');
   console.log('Result card hidden for quick retest:', doc.getElementById('resultCard').style.display === 'none');
 
+  // Regression check for "tested items showing as unfound in the report": the Test Date field
+  // must default to today rather than being left blank -- a blank/null test_date never matches
+  // a report's exact-date filter, so the item wrongly shows as "unfound" despite being tested.
+  const todayStr = (() => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
+  console.log('Test Date defaults to today after quick retest:', doc.getElementById('t_test_date').value === todayStr);
+
   setVal('t_result', 'fail');
   click('saveTestBtn');
   await wait(300);
   console.log('Test status after logging retest:', doc.getElementById('testStatus').textContent);
   console.log('Backend received the test log:', testLogs.length === 1 && testLogs[0].result === 'fail');
+  console.log('Backend received a non-null test_date matching today:', testLogs.length === 1 && testLogs[0].test_date === todayStr);
 
   doc.querySelector('.tab-btn[data-tab="register"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await wait(200);

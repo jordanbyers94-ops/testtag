@@ -19,6 +19,14 @@ const API = APP_BASE.replace(/\/$/, '') + '/api';
 const IS_PROXIED = APP_BASE !== '/';
 let accessToken = localStorage.getItem('testTagAccessToken') || (IS_PROXIED ? 'proxied' : '');
 
+// Device-local date, NOT new Date().toISOString().slice(0,10) -- that's UTC, which rolls over to
+// the next/previous calendar day for anyone testing in the evening/morning in a timezone ahead
+// of or behind UTC, silently mismatching whatever date the report is later generated for.
+function todayISO() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
 // ---------- Home button (only meaningful when reached via the Audit Tool's proxy) ----------
 // Standalone hosting (e.g. directly on Railway) has no "home" to go back to, so this only
 // shows up when proxied under the Audit Tool -- APP_BASE is then something like "/testtag/",
@@ -391,6 +399,7 @@ document.getElementById('skipExtractBtn').addEventListener('click', () => {
   if (!site) { alert('Enter the site/client name first.'); return; }
   ['f_appliance', 'f_plant_no', 'f_brand', 'f_model_no', 'f_serial_no'].forEach((id) => document.getElementById(id).value = '');
   document.getElementById('t_tag_no').value = '';
+  document.getElementById('t_test_date').value = todayISO();
   document.getElementById('resultCard').style.display = 'block';
   document.getElementById('testCard').style.display = 'block';
   document.getElementById('existingNotice').style.display = 'none';
@@ -426,7 +435,10 @@ extractBtn.addEventListener('click', async () => {
     document.getElementById('f_serial_no').value = ex.serial_no || '';
     document.getElementById('t_tag_no').value = ex.tag_no || '';
     document.getElementById('t_result').value = ['fail', 'repairable'].includes(ex.pass_fail_on_tag) ? ex.pass_fail_on_tag : 'pass';
-    document.getElementById('t_test_date').value = normalizeDate(ex.test_date_on_tag);
+    // Prefer whatever date was actually printed on the tag; fall back to today rather than
+    // leaving this blank -- a blank date here means the test never matches any report's exact
+    // test_date filter later, so it'd wrongly show up as "unfound" despite being tested.
+    document.getElementById('t_test_date').value = normalizeDate(ex.test_date_on_tag) || todayISO();
 
     document.getElementById('resultCard').style.display = 'block';
     extractStatus.textContent = ex.confidence_notes ? `Note: ${ex.confidence_notes}` : 'Done - check details below.';
@@ -545,7 +557,11 @@ document.getElementById('saveTestBtn').addEventListener('click', async () => {
     tester_name: document.getElementById('t_tester_name').value.trim() || null,
     tester_licence: document.getElementById('t_tester_licence').value.trim() || null,
     result: document.getElementById('t_result').value,
-    test_date: document.getElementById('t_test_date').value || null,
+    // Falls back to today rather than null -- every UI path that shows this form now defaults
+    // the field itself to today too, but this is the last line of defense: a test logged with a
+    // null test_date never matches a report's exact-date filter, so it'd wrongly show up as
+    // "unfound" in the generated report despite clearly having been tested.
+    test_date: document.getElementById('t_test_date').value || todayISO(),
     next_due: document.getElementById('t_next_due').value || null,
     notes: document.getElementById('t_notes').value.trim() || null,
     photo_base64: currentPhotoBase64 || null,
@@ -826,7 +842,11 @@ document.getElementById('quickRetestBtn').addEventListener('click', async () => 
     document.getElementById('testCard').style.display = 'block';
     document.getElementById('t_tag_no').value = '';
     document.getElementById('t_notes').value = '';
-    document.getElementById('t_test_date').value = '';
+    // Defaults to today rather than blank -- a blank date here means the test never matches any
+    // report's exact test_date filter later, so it'd wrongly show up as "unfound" in the
+    // generated report despite clearly having been tested (this is the most common path for
+    // logging a test, so this was the main source of that bug).
+    document.getElementById('t_test_date').value = todayISO();
     document.getElementById('t_next_due').value = '';
     document.getElementById('t_result').value = 'pass';
     document.getElementById('testStatus').textContent = '';
