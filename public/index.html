@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Aus Air Electrical — Test &amp; Tag</title>
 <link rel="stylesheet" href="./style.css" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="icon" href="./icon.png" />
+<link rel="apple-touch-icon" href="./icon.png" />
+<meta name="theme-color" content="#f5a623" />
 </head>
 <body>
   <header class="topbar">
@@ -17,13 +21,15 @@
     </div>
   </header>
   <div id="offlineBanner" class="offline-banner" style="display:none;">
-    Offline — saves will queue and sync automatically once you're back online. <span id="queueCount"></span>
+    <span id="offlineBannerText">Offline — saves will queue and sync automatically once you're back online.</span>
+    <button id="syncNowBtn" class="btn btn-primary" style="display:none;">Upload to Cloud</button>
   </div>
 
   <nav class="tabs">
     <button class="tab-btn active" data-tab="scan">Scan Tag</button>
     <button class="tab-btn" data-tab="register">Register</button>
     <button class="tab-btn" data-tab="due">Due</button>
+    <button class="tab-btn" data-tab="settings">Settings</button>
   </nav>
 
   <main id="app">
@@ -118,6 +124,7 @@
         <div class="register-toolbar">
           <button id="refreshBtn" class="btn">Refresh</button>
           <button id="exportBtn" class="btn btn-primary">Export .xlsx</button>
+          <button id="reportBtn" class="btn btn-primary">Generate Report</button>
           <label class="btn" for="importInput">Import Register</label>
           <input id="importInput" type="file" accept=".xlsx,.xls,.csv" style="display:none;" />
         </div>
@@ -133,6 +140,11 @@
         <p class="hint">Overdue and due-within-30-days counts, by site. Tap a site to jump to its register.</p>
         <div id="dueSummary"></div>
       </div>
+    </section>
+
+    <!-- SETTINGS TAB -->
+    <section id="tab-settings" class="tab-panel">
+      <div id="settingsContainer"></div>
     </section>
   </main>
 
@@ -166,6 +178,24 @@
     </div>
   </div>
 
+  <!-- Generate Report modal -->
+  <div id="reportModal" class="modal" style="display:none;">
+    <div class="modal-inner">
+      <div class="modal-header">
+        <h3>Generate Test Register Report</h3>
+        <button id="closeReportModal" class="btn">Close</button>
+      </div>
+      <p class="hint">Produces the same "Test Register" report Aus Air sends to clients — cover page, inspection summary, and the full item-by-item register — for one site's visit.</p>
+      <label>Site<input id="reportSiteDisplay" type="text" disabled /></label>
+      <label>Visit date <span class="hint">(which test date to report on)</span>
+        <select id="reportDateSelect"></select>
+      </label>
+      <button id="generateReportBtn" class="btn btn-primary">Generate .docx</button>
+      <div id="reportModalStatus" class="status"></div>
+    </div>
+  </div>
+
+  <script src="./technician-profile.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

@@ -119,7 +119,8 @@ input[type="file"] { margin-top: 8px; }
 
 datalist { display: none; }
 
-.offline-banner { background: #c62828; color: #fff; font-size: 13px; padding: 8px 16px; text-align: center; }
+.offline-banner { background: #c62828; color: #fff; font-size: 13px; padding: 8px 16px; text-align: center; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; }
+.offline-banner #syncNowBtn { margin: 0; padding: 6px 14px; font-size: 12px; }
 
 .chip { border-radius: 20px; padding: 6px 14px; }
 .chip.active { background: var(--aus-black); border-color: var(--aus-black); color: #fff; }

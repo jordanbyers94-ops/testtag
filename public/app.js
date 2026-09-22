@@ -46,6 +46,7 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
     if (btn.dataset.tab === 'register') { loadSiteOptions(); loadRegister(); }
     if (btn.dataset.tab === 'due') loadDueSummary();
+    if (btn.dataset.tab === 'settings') renderSettingsTab();
   });
 });
 
@@ -66,29 +67,142 @@ document.getElementById('tokenSaveBtn').addEventListener('click', () => {
 function apiHeaders(extra = {}) { return { 'x-app-token': accessToken, ...extra }; }
 
 // ---------- Remembered tester ----------
+// Backed by the shared technician-profile.js module (see that file for the full contract).
 // When proxied under the Audit Tool (see IS_PROXIED above), this page shares an origin with it,
-// so the technician's own name/licence from their Cloud Sync login (cloudTechnicianName /
-// cloudTechnicianLicense -- set by the Audit Tool's own sync.js) is readable here directly. That
-// takes priority over Test & Tag's own separately-remembered tester, since it's already known
-// and correct for whoever's logged in right now -- no retyping needed. Falls back to Test & Tag's
-// own remembered values (or blank) whenever there's no active Audit Tool login to read, including
-// always on standalone hosting.
+// so the technician's own name/licence from their Cloud Sync login is readable here directly and
+// takes priority -- no retyping needed. Falls back to Test & Tag's own remembered values (set on
+// the new Settings tab) whenever there's no active Audit Tool login to read, including always on
+// standalone hosting. TESTER_PROFILE_PREFIX namespaces Test & Tag's own local-fallback storage
+// keys so a future addon reusing the same module doesn't collide with these.
+const TESTER_PROFILE_PREFIX = 'testTag';
 function prefillTester() {
   const nameEl = document.getElementById('t_tester_name');
   const licenceEl = document.getElementById('t_tester_licence');
-  const cloudName = IS_PROXIED ? localStorage.getItem('cloudTechnicianName') : null;
-  if (cloudName) {
-    nameEl.value = cloudName;
-    licenceEl.value = localStorage.getItem('cloudTechnicianLicense') || '';
-  } else {
-    nameEl.value = localStorage.getItem('testTagTesterName') || '';
-    licenceEl.value = localStorage.getItem('testTagTesterLicence') || '';
-  }
+  const effective = TechnicianProfile.resolve(TESTER_PROFILE_PREFIX);
+  nameEl.value = effective.name;
+  licenceEl.value = effective.licence;
 }
 prefillTester();
 function persistTester() {
-  localStorage.setItem('testTagTesterName', document.getElementById('t_tester_name').value.trim());
-  localStorage.setItem('testTagTesterLicence', document.getElementById('t_tester_licence').value.trim());
+  // Only writes back into the local-fallback slot -- if the tester field currently reflects a
+  // cloud login, this is a harmless no-op for prefill purposes (cloud still takes priority next
+  // time) but keeps the local fallback in sync in case the technician later logs out.
+  TechnicianProfile.writeLocal(
+    TESTER_PROFILE_PREFIX,
+    document.getElementById('t_tester_name').value,
+    document.getElementById('t_tester_licence').value
+  );
+}
+function renderSettingsTab() {
+  TechnicianProfile.renderSettingsScreen(document.getElementById('settingsContainer'), {
+    prefix: TESTER_PROFILE_PREFIX,
+    onChange: prefillTester,
+  });
+}
+
+// ---------- Local register cache (IndexedDB) ----------
+// Mirrors the last successful online GET /api/assets response so the Register and Due tabs
+// stay browsable with no connection at all, not just writable (see the offline queue below for
+// the write side). Best-effort: every helper here swallows its own errors so a cache problem
+// never blocks the app's real, server-backed behavior when online.
+const IDB_NAME = 'testTagLocalCache';
+const IDB_VERSION = 1;
+function openIdb() {
+  return new Promise((resolve, reject) => {
+    if (!('indexedDB' in window)) { reject(new Error('IndexedDB not available')); return; }
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'id' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbReplaceAllAssets(items) {
+  try {
+    const db = await openIdb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('assets', 'readwrite');
+      const store = tx.objectStore('assets');
+      store.clear();
+      items.forEach((item) => store.put(item));
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) { /* best-effort */ }
+}
+async function idbPutAsset(item) {
+  try {
+    const db = await openIdb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('assets', 'readwrite');
+      tx.objectStore('assets').put(item);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) { /* best-effort */ }
+}
+async function idbGetAsset(id) {
+  try {
+    const db = await openIdb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('assets', 'readonly');
+      const req = tx.objectStore('assets').get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (e) { return null; }
+}
+async function idbGetAllAssets() {
+  try {
+    const db = await openIdb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('assets', 'readonly');
+      const req = tx.objectStore('assets').getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (e) { return []; }
+}
+
+// Optimistically updates the cached copy of an asset with a just-logged (but still queued)
+// test result, so it shows up with its new Pass/Fail badge and due date immediately in the
+// Register list rather than only after the next successful online refresh.
+async function mergeOptimisticTest(assetId, payload) {
+  const existing = (await idbGetAsset(assetId)) || { id: assetId };
+  await idbPutAsset({
+    ...existing,
+    last_tag_no: payload.tag_no || existing.last_tag_no || null,
+    last_result: payload.result || existing.last_result || null,
+    last_next_due: payload.next_due || existing.last_next_due || null,
+    last_tester_name: payload.tester_name || existing.last_tester_name || null,
+    _pending: true,
+  });
+}
+
+// Re-implements the same site/search/result/due filtering the server does in
+// routes/assets.js's GET / handler, so a cached register behaves identically when browsed
+// offline. Keep these two in sync if the server-side filtering logic changes.
+function filterAssetsLocally(rows, { site, search, filter }) {
+  let out = rows;
+  if (site) out = out.filter((r) => (r.site || '').toLowerCase() === site.toLowerCase());
+  if (search) {
+    const q = search.toLowerCase();
+    out = out.filter((r) => [r.appliance, r.plant_no, r.location, r.serial_no, r.brand, r.last_tag_no]
+      .filter(Boolean).join(' ').toLowerCase().includes(q));
+  }
+  if (filter === 'fail') out = out.filter((r) => r.last_result === 'fail');
+  else if (filter === 'overdue' || filter === 'soon') {
+    const today = new Date().toISOString().slice(0, 10);
+    const in30 = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    out = out.filter((r) => {
+      if (!r.last_next_due) return false;
+      const due = String(r.last_next_due).slice(0, 10);
+      return filter === 'overdue' ? due < today : (due >= today && due <= in30);
+    });
+  }
+  return out;
 }
 
 // ---------- Offline queue ----------
@@ -110,19 +224,39 @@ function makeTempId() { return 'temp_' + Date.now() + '_' + Math.random().toStri
 
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
+  const bannerText = document.getElementById('offlineBannerText');
+  const syncBtn = document.getElementById('syncNowBtn');
   const q = getQueue();
   if (!navigator.onLine) {
-    banner.style.display = 'block';
-    document.getElementById('queueCount').textContent = q.length ? `(${q.length} queued)` : '';
+    banner.style.display = 'flex';
+    bannerText.textContent = q.length
+      ? `Offline — ${q.length} item${q.length === 1 ? '' : 's'} queued, will sync once you're back online.`
+      : "Offline — saves will queue and sync automatically once you're back online.";
+    syncBtn.style.display = 'none'; // can't upload without a connection
     document.getElementById('extractBtn').disabled = true;
     document.getElementById('extractBtn').title = 'Photo reading needs an internet connection';
+  } else if (q.length) {
+    banner.style.display = 'flex';
+    bannerText.textContent = `${q.length} item${q.length === 1 ? '' : 's'} waiting to upload.`;
+    syncBtn.style.display = 'inline-block';
+    syncBtn.disabled = false;
+    syncBtn.textContent = 'Upload to Cloud';
+    document.getElementById('extractBtn').disabled = !photoInput.files[0];
+    document.getElementById('extractBtn').title = '';
   } else {
-    banner.style.display = q.length ? 'block' : 'none';
-    document.getElementById('queueCount').textContent = q.length ? `(${q.length} still syncing)` : '';
+    banner.style.display = 'none';
     document.getElementById('extractBtn').disabled = !photoInput.files[0];
     document.getElementById('extractBtn').title = '';
   }
 }
+
+document.getElementById('syncNowBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('syncNowBtn');
+  btn.disabled = true;
+  btn.textContent = 'Uploading…';
+  await flushQueue();
+  updateOfflineBanner();
+});
 
 // Processes the queue in order (asset actions before the test actions that reference them,
 // since they were enqueued in that order). Resolves each synced asset's tempId to its real id
@@ -323,6 +457,16 @@ document.getElementById('saveAssetBtn').addEventListener('click', async () => {
       enqueue({ type: 'asset', tempId, body: payload });
       currentAssetId = tempId;
       currentAssetIsTemp = true;
+      // Merge it into the local register cache immediately (not just the queue) so it actually
+      // shows up in the Register tab right away, marked "Pending sync", rather than being
+      // invisible until the next successful online refresh.
+      idbPutAsset({
+        id: tempId, site: payload.site, location: payload.location, appliance: payload.appliance,
+        plant_no: payload.plant_no, brand: payload.brand, model_no: payload.model_no,
+        serial_no: payload.serial_no, environment_category: payload.environment_category,
+        notes: payload.notes, last_tag_no: null, last_result: null, last_next_due: null,
+        last_tester_name: null, _pending: true,
+      });
       document.getElementById('testCard').style.display = 'block';
       extractStatus.textContent = 'Offline - asset queued, will sync when back online.';
     }
@@ -357,11 +501,13 @@ document.getElementById('saveTestBtn').addEventListener('click', async () => {
       // The parent asset is itself still queued -- queue this test against the same tempId so
       // flushQueue() can chain them together once the asset syncs (see flushQueue above).
       enqueue({ type: 'test', assetTempId: currentAssetId, body: payload });
+      await mergeOptimisticTest(currentAssetId, payload);
       document.getElementById('testStatus').textContent = 'Offline - test result saved and queued, will sync with its asset once back online.';
     } else {
       // Asset was already saved with a real id (earlier, while online); we've since gone
       // offline before logging the test. Queue it against that real id directly.
       enqueue({ type: 'test', assetId: currentAssetId, body: payload });
+      await mergeOptimisticTest(currentAssetId, payload);
       document.getElementById('testStatus').textContent = 'Offline - test result queued, will sync when back online.';
     }
     setTimeout(resetScanForm, 1400);
@@ -406,48 +552,76 @@ function setActiveFilter(f) {
 
 async function loadRegister() {
   registerList.innerHTML = '<p class="status">Loading...</p>';
+  const site = siteFilter.value.trim();
+  const search = searchInput.value.trim();
+  let rows;
+  let fromCache = false;
+
   try {
+    if (!navigator.onLine) throw new Error('offline');
     const params = new URLSearchParams();
-    if (siteFilter.value.trim()) params.set('site', siteFilter.value.trim());
-    if (searchInput.value.trim()) params.set('search', searchInput.value.trim());
+    if (site) params.set('site', site);
+    if (search) params.set('search', search);
     if (activeFilter === 'fail') params.set('result', 'fail');
     else if (activeFilter === 'overdue') params.set('due', 'overdue');
     else if (activeFilter === 'soon') params.set('due', 'soon');
     const res = await fetch(`${API}/assets?${params}`, { headers: apiHeaders() });
-    const rows = await res.json();
+    rows = await res.json();
     if (!res.ok) throw new Error(rows.error || 'Failed to load');
-
-    if (rows.length === 0) {
-      registerList.innerHTML = '<p class="status">No assets found.</p>';
+    // Mirror the full unfiltered register into the local cache (only when this fetch itself
+    // wasn't already filtered) so an offline browse later has the complete picture to filter
+    // client-side, not just whatever slice happened to be on screen when connection dropped.
+    if (!site && !search && !activeFilter) idbReplaceAllAssets(rows);
+  } catch (err) {
+    try {
+      const cached = await idbGetAllAssets();
+      rows = filterAssetsLocally(cached, { site, search, filter: activeFilter });
+      fromCache = true;
+    } catch (idbErr) {
+      registerList.innerHTML = `<p class="status">Error: ${err.message}</p>`;
       return;
     }
-
-    const today = new Date().toISOString().slice(0, 10);
-    const in30 = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
-
-    registerList.innerHTML = rows.map((r) => {
-      const badge = r.last_result === 'pass' ? 'badge-pass' : r.last_result === 'fail' ? 'badge-fail' : 'badge-none';
-      const badgeText = r.last_result ? r.last_result.toUpperCase() : 'NOT TESTED';
-      const due = r.last_next_due ? String(r.last_next_due).slice(0, 10) : null;
-      let rowClass = '';
-      if (due && due < today) rowClass = 'overdue';
-      else if (due && due <= in30) rowClass = 'soon';
-      return `
-        <div class="asset-row ${rowClass}" data-asset-id="${r.id}" data-appliance="${escapeHtml(r.appliance || '')}">
-          <div class="plant-no">${escapeHtml(r.appliance || 'Unnamed item')} <span class="badge ${badge}">${badgeText}</span></div>
-          <div class="meta">${escapeHtml(r.site)} · ${escapeHtml(r.location || '—')} ${r.plant_no ? '· Plant No. ' + escapeHtml(r.plant_no) : ''}</div>
-          <div class="meta">${r.brand ? escapeHtml(r.brand) + ' ' : ''}${r.model_no ? escapeHtml(r.model_no) : ''} ${r.last_tag_no ? '· Tag ' + escapeHtml(r.last_tag_no) : ''}</div>
-          <div class="meta">Next due: ${due || '—'}${rowClass === 'overdue' ? ' (OVERDUE)' : rowClass === 'soon' ? ' (due soon)' : ''}</div>
-        </div>
-      `;
-    }).join('');
-
-    registerList.querySelectorAll('.asset-row').forEach((el) => {
-      el.addEventListener('click', () => openHistoryModal(el.dataset.assetId, el.dataset.appliance));
-    });
-  } catch (err) {
-    registerList.innerHTML = `<p class="status">Error: ${err.message}</p>`;
   }
+
+  if (rows.length === 0) {
+    registerList.innerHTML = `<p class="status">No assets found.${fromCache ? ' (showing last saved copy, offline)' : ''}</p>`;
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const in30 = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+
+  const cacheNotice = fromCache
+    ? '<p class="status" style="color:#e65100;">Showing the last saved copy — offline, so this may not include very recent changes.</p>'
+    : '';
+
+  registerList.innerHTML = cacheNotice + rows.map((r) => {
+    const badge = r.last_result === 'pass' ? 'badge-pass' : r.last_result === 'fail' ? 'badge-fail' : 'badge-none';
+    const badgeText = r.last_result ? r.last_result.toUpperCase() : 'NOT TESTED';
+    const due = r.last_next_due ? String(r.last_next_due).slice(0, 10) : null;
+    let rowClass = '';
+    if (due && due < today) rowClass = 'overdue';
+    else if (due && due <= in30) rowClass = 'soon';
+    const pendingBadge = r._pending ? '<span class="badge" style="background:#fff3e0;color:#e65100;">Pending sync</span>' : '';
+    return `
+      <div class="asset-row ${rowClass}" data-asset-id="${r.id}" data-appliance="${escapeHtml(r.appliance || '')}">
+        <div class="plant-no">${escapeHtml(r.appliance || 'Unnamed item')} <span class="badge ${badge}">${badgeText}</span> ${pendingBadge}</div>
+        <div class="meta">${escapeHtml(r.site)} · ${escapeHtml(r.location || '—')} ${r.plant_no ? '· Plant No. ' + escapeHtml(r.plant_no) : ''}</div>
+        <div class="meta">${r.brand ? escapeHtml(r.brand) + ' ' : ''}${r.model_no ? escapeHtml(r.model_no) : ''} ${r.last_tag_no ? '· Tag ' + escapeHtml(r.last_tag_no) : ''}</div>
+        <div class="meta">Next due: ${due || '—'}${rowClass === 'overdue' ? ' (OVERDUE)' : rowClass === 'soon' ? ' (due soon)' : ''}</div>
+      </div>
+    `;
+  }).join('');
+
+  registerList.querySelectorAll('.asset-row').forEach((el) => {
+    el.addEventListener('click', () => {
+      if (String(el.dataset.assetId).startsWith('temp_')) {
+        alert('This item is still queued to sync and doesn\'t have its test history available yet. It will be fully viewable once back online and synced.');
+        return;
+      }
+      openHistoryModal(el.dataset.assetId, el.dataset.appliance);
+    });
+  });
 }
 
 function escapeHtml(str) {
@@ -718,6 +892,79 @@ document.getElementById('exportBtn').addEventListener('click', () => {
     });
 });
 
+// ---------- Generate Report (the client-facing "Test Register" .docx, per site+visit) ----------
+function formatDMY(isoDate) {
+  if (!isoDate) return '';
+  const d = new Date(isoDate + 'T00:00:00Z');
+  if (isNaN(d)) return isoDate;
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}/${d.getUTCFullYear()}`;
+}
+
+document.getElementById('reportBtn').addEventListener('click', async () => {
+  const site = siteFilter.value.trim();
+  if (!site) { alert('Type a site into the "Filter by site" box first -- reports are generated per site.'); return; }
+
+  const statusEl = document.getElementById('reportModalStatus');
+  const select = document.getElementById('reportDateSelect');
+  const generateBtn = document.getElementById('generateReportBtn');
+  statusEl.textContent = '';
+  document.getElementById('reportSiteDisplay').value = site;
+  select.innerHTML = '<option>Loading...</option>';
+  generateBtn.disabled = true;
+  document.getElementById('reportModal').style.display = 'flex';
+
+  try {
+    const res = await fetch(`${API}/register/report-dates?site=${encodeURIComponent(site)}`, { headers: apiHeaders() });
+    const dates = await res.json();
+    if (!res.ok) throw new Error(dates.error || 'Failed to load test dates');
+    if (!dates.length) {
+      select.innerHTML = '';
+      statusEl.textContent = 'No test dates recorded for this site yet -- log at least one test first.';
+      statusEl.className = 'status err';
+      return;
+    }
+    select.innerHTML = dates.map((d) => `<option value="${d}">${formatDMY(d)}</option>`).join('');
+    generateBtn.disabled = false;
+  } catch (err) {
+    select.innerHTML = '';
+    statusEl.textContent = `Error: ${err.message}`;
+    statusEl.className = 'status err';
+  }
+});
+
+document.getElementById('closeReportModal').addEventListener('click', () => {
+  document.getElementById('reportModal').style.display = 'none';
+});
+
+document.getElementById('generateReportBtn').addEventListener('click', async () => {
+  const site = document.getElementById('reportSiteDisplay').value;
+  const testDate = document.getElementById('reportDateSelect').value;
+  if (!testDate) return;
+  const statusEl = document.getElementById('reportModalStatus');
+  statusEl.textContent = 'Generating…'; statusEl.className = 'status';
+  try {
+    const res = await fetch(`${API}/register/report?site=${encodeURIComponent(site)}&test_date=${encodeURIComponent(testDate)}`, { headers: apiHeaders() });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Report generation failed');
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const m = disposition.match(/filename="?([^"]+)"?/);
+    const filename = m ? m[1] : `Test_Register_${site}_${testDate}.docx`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    statusEl.textContent = 'Downloaded.'; statusEl.className = 'status ok';
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`; statusEl.className = 'status err';
+  }
+});
+
 // ---------- Import ----------
 document.getElementById('importInput').addEventListener('change', async () => {
   const file = document.getElementById('importInput').files[0];
@@ -739,6 +986,15 @@ document.getElementById('importInput').addEventListener('change', async () => {
     importStatus.textContent = `Error: ${err.message}`;
   }
 });
+
+// ---------- Service worker (app-shell offline caching) ----------
+// Registered with a relative path so its scope is wherever this app is actually being served
+// from -- domain root when standalone, "/testtag/" when reverse-proxied under the Audit Tool.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('Service worker registration failed:', e));
+  });
+}
 
 // ---------- Init ----------
 ensureToken();

@@ -3,6 +3,7 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const router = express.Router();
 const { pool } = require('../db');
+const { buildReportDocx } = require('../report_builder');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -219,6 +220,76 @@ router.post('/import', upload.single('file'), async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Import failed - check the file is a valid .xlsx or .csv.' });
+  }
+});
+
+// GET /api/register/report-dates?site=X - distinct test dates recorded at a site, most recent
+// first. Powers the "which visit are you reporting on" picker before generating a report.
+router.get('/report-dates', async (req, res) => {
+  try {
+    const site = (req.query.site || '').trim();
+    if (!site) return res.status(400).json({ error: 'site is required.' });
+    const { rows } = await pool.query(
+      `SELECT DISTINCT tr.test_date
+       FROM test_records tr JOIN assets a ON a.id = tr.asset_id
+       WHERE LOWER(a.site) = LOWER($1) AND tr.test_date IS NOT NULL
+       ORDER BY tr.test_date DESC`,
+      [site]
+    );
+    res.json(rows.map((r) => (r.test_date instanceof Date ? r.test_date.toISOString().slice(0, 10) : r.test_date)));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to load report dates.' });
+  }
+});
+
+// GET /api/register/report?site=X&test_date=YYYY-MM-DD
+// Generates the "Test Register" .docx report for one site's visit on one date, matching Aus
+// Air's existing report template: cover page, inspection details/summary (pass/fail/unfound),
+// then the full register table.
+//
+// "Tested this visit" = the asset has a test_record dated exactly test_date. "Unfound" = the
+// asset is on the register for this site but has no test_record on that date -- i.e. it was
+// expected (already on the register from a prior cycle) but wasn't located/tested this time.
+// This mirrors the template's own Pass/Fail/Unfound structure without needing any new columns.
+router.get('/report', async (req, res) => {
+  try {
+    const site = (req.query.site || '').trim();
+    const testDate = (req.query.test_date || '').trim();
+    if (!site) return res.status(400).json({ error: 'site is required.' });
+    if (!testDate) return res.status(400).json({ error: 'test_date is required.' });
+
+    const { rows: assets } = await pool.query(
+      `SELECT * FROM assets WHERE LOWER(site) = LOWER($1)
+       ORDER BY
+         CASE WHEN plant_no ~ '^[0-9]+$' THEN plant_no::integer END NULLS LAST,
+         plant_no ASC NULLS LAST`,
+      [site]
+    );
+    if (assets.length === 0) return res.status(404).json({ error: `No register items found for "${site}".` });
+
+    const { rows: testsOnDate } = await pool.query(
+      `SELECT tr.* FROM test_records tr JOIN assets a ON a.id = tr.asset_id
+       WHERE LOWER(a.site) = LOWER($1) AND tr.test_date = $2
+       ORDER BY tr.created_at DESC`,
+      [site, testDate]
+    );
+    // If an asset somehow has more than one test record on the same date, the most recently
+    // created one wins -- matches the "latest test" tie-break used elsewhere in this app
+    // (see the LEFT JOIN LATERAL queries in routes/assets.js).
+    const testByAssetId = {};
+    for (const t of testsOnDate) {
+      if (!(t.asset_id in testByAssetId)) testByAssetId[t.asset_id] = t;
+    }
+
+    const buffer = await buildReportDocx({ site, testDate, assets, testByAssetId });
+    const filenameSite = site.replace(/[^a-z0-9]+/gi, '_');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="Test_Register_${filenameSite}_${testDate}.docx"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Report generation failed.' });
   }
 });
 
