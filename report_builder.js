@@ -93,7 +93,17 @@ function footer() {
   });
 }
 
-function buildCoverPage({ site, testDate }) {
+// scopeType/scopeValue generalize the report's grouping to be either a Site (the original,
+// still-default behaviour) or a Job Number (a per-visit job reference used exactly like Site --
+// handy for mobile test & tag work spanning multiple locations/vehicles under one job). Either
+// way scopeValue is the single string that identifies "this visit" in the narrative text.
+function scopeLabel(scopeType) { return scopeType === 'job_number' ? 'Job Number' : 'Site'; }
+function scopeNarrative({ scopeType, scopeValue }) {
+  return scopeType === 'job_number' ? `Job Number ${scopeValue}` : scopeValue;
+}
+
+function buildCoverPage({ testDate, scopeType, scopeValue, clientName }) {
+  const narrative = scopeNarrative({ scopeType, scopeValue });
   return [
     new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -122,16 +132,21 @@ function buildCoverPage({ site, testDate }) {
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing: { after: 700 },
-      children: [new TextRun({ text: site, size: 32, color: BRAND_BLACK })],
+      spacing: { after: clientName ? 60 : 700 },
+      children: [new TextRun({ text: scopeValue, size: 32, color: BRAND_BLACK })],
     }),
+    ...(clientName ? [new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 700 },
+      children: [new TextRun({ text: clientName, size: 22, color: BRAND_GRAY })],
+    })] : []),
     new Paragraph({
       spacing: { before: 600, after: 100 },
       children: [new TextRun({ text: 'Abstract', bold: true, size: 22 })],
     }),
     new Paragraph({
       children: [new TextRun({
-        text: `Testing and tagging of portable electrical equipment, together with RCD push-button testing, was carried out in accordance with AS 3760:2022 at ${site} on ${formatLong(testDate)}.`,
+        text: `Testing and tagging of portable electrical equipment, together with RCD push-button testing, was carried out in accordance with AS 3760:2022 at ${narrative} on ${formatLong(testDate)}.`,
         size: 22,
       })],
     }),
@@ -160,7 +175,7 @@ function complianceStatement({ total, passedAssets, failedAssets, unfoundAssets,
   return s;
 }
 
-function buildDetailsPage({ site, testDate, assets, testByAssetId }) {
+function buildDetailsPage({ testDate, assets, testByAssetId, scopeType, scopeValue, clientName }) {
   const total = assets.length;
   const passedAssets = [];
   const failedAssets = [];
@@ -187,7 +202,8 @@ function buildDetailsPage({ site, testDate, assets, testByAssetId }) {
   children.push(kv('Tests Performed:', 'AS/NZS 3760:2022'));
   ['Visual Electrical Safety Inspection', 'Earth Continuity', 'Insulation Resistance'].forEach((t) => children.push(bullet(t)));
   children.push(kv('Test Date:', formatDMY(testDate)));
-  children.push(kv('Location:', site));
+  children.push(kv(scopeLabel(scopeType) + ':', scopeValue));
+  if (clientName) children.push(kv('Client:', clientName));
   children.push(kv('Inspector:', inspector));
 
   children.push(heading('Summary of Results'));
@@ -283,14 +299,20 @@ function buildRegisterTable({ assets, testByAssetId }) {
   return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows });
 }
 
-async function buildReportDocx({ site, testDate, assets, testByAssetId }) {
+// site: used when scoping by Site (the original, default behaviour). jobNumber: when given,
+// the report is scoped by Job Number instead (site is ignored for narrative/heading purposes,
+// even if also present on individual asset rows -- a job can span multiple sites/vehicles).
+// clientName: optional, surfaced under the cover title and in the details page when given.
+async function buildReportDocx({ site, jobNumber, clientName, testDate, assets, testByAssetId }) {
+  const scopeType = jobNumber ? 'job_number' : 'site';
+  const scopeValue = jobNumber || site;
   const doc = new Document({
     sections: [{
       properties: { page: { margin: { top: 720, bottom: 900, left: 900, right: 900 } } },
       footers: { default: footer() },
       children: [
-        ...buildCoverPage({ site, testDate }),
-        ...buildDetailsPage({ site, testDate, assets, testByAssetId }),
+        ...buildCoverPage({ testDate, scopeType, scopeValue, clientName }),
+        ...buildDetailsPage({ testDate, assets, testByAssetId, scopeType, scopeValue, clientName }),
         heading('Register'),
         buildRegisterTable({ assets, testByAssetId }),
       ],

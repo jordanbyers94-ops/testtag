@@ -54,6 +54,11 @@ async function initDb() {
   `);
   // Older deployments won't have this column yet - add it if missing.
   await pool.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS environment_category TEXT;`);
+  // Client Name (who the report is for, e.g. school/business) and Job Number (a per-visit
+  // job reference, used exactly like Site as an alternate grouping for reports/exports) -
+  // both entered on the Scan tab alongside Site/Location.
+  await pool.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS client_name TEXT;`);
+  await pool.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS job_number TEXT;`);
 
   // A given plant number only needs to be unique within the same site+location
   // (e.g. Plant No. 3 can be "Fridge 1" in the Tuckshop AND "Microwave" in the
@@ -89,6 +94,7 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_test_records_tag_no ON test_records(tag_no);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_assets_site ON assets(site);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_assets_serial_no ON assets(serial_no);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_assets_job_number ON assets(job_number);`);
 
   console.log('Database schema ready (sites, assets, test_records).');
 }

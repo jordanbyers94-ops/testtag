@@ -9,13 +9,17 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 
 const TEMPLATE_HEADERS = ['Asset ID', 'Location', 'Appliance', 'Plant No.', 'Brand ', 'Model No.', 'Serial No.', 'Pass/Fail', 'Tag No.', 'Test Date', 'Next Due', 'Notes'];
 
-async function fetchRegisterRows(site, resultFilter) {
+// scope: { site } or { jobNumber } -- exactly one of the two, mirroring how Site has always
+// worked (used as-is when neither is given, for backward compatibility / "all sites" export).
+async function fetchRegisterRows({ site, jobNumber } = {}, resultFilter) {
   const params = [];
   const clauses = [];
   if (site) { params.push(site); clauses.push(`a.site = $${params.length}`); }
+  if (jobNumber) { params.push(jobNumber); clauses.push(`LOWER(a.job_number) = LOWER($${params.length})`); }
   const { rows } = await pool.query(
     `
     SELECT a.site, a.location, a.appliance, a.plant_no, a.brand, a.model_no, a.serial_no, a.notes,
+      a.client_name, a.job_number,
       t.tag_no AS last_tag_no, t.result AS last_result, t.test_date AS last_test_date, t.next_due AS last_next_due
     FROM assets a
     LEFT JOIN LATERAL (
@@ -31,23 +35,26 @@ async function fetchRegisterRows(site, resultFilter) {
 }
 
 // GET /api/register/export?site=xxx&result=fail
-// With a site given: reproduces the original template exactly (title rows + these headers)
-// so it drops straight back into the same-shaped workbook.
-// Without a site: a consolidated multi-site view with a Site column added.
+// GET /api/register/export?job_number=xxx&result=fail
+// With a site (or job_number) given: reproduces the original template exactly (title rows +
+// these headers) so it drops straight back into the same-shaped workbook. Without either: a
+// consolidated multi-site view with a Site column added.
 // ?result=fail exports only items whose latest test failed - handy for a
 // client-facing "these need attention" list.
 router.get('/export', async (req, res) => {
   try {
     const site = (req.query.site || '').trim();
+    const jobNumber = (req.query.job_number || '').trim();
     const resultFilter = (req.query.result || '').trim();
-    const rows = await fetchRegisterRows(site || null, resultFilter === 'fail' || resultFilter === 'pass' ? resultFilter : null);
+    const rows = await fetchRegisterRows({ site: site || null, jobNumber: jobNumber || null }, resultFilter === 'fail' || resultFilter === 'pass' ? resultFilter : null);
+    const scopeTitle = jobNumber ? `Job Number: ${jobNumber}` : site;
 
     const wb = XLSX.utils.book_new();
     let ws;
 
-    if (site) {
+    if (scopeTitle) {
       const aoa = [
-        [site.toUpperCase()],
+        [scopeTitle.toUpperCase()],
         ['Asset Register - Test and Tag Items'],
         TEMPLATE_HEADERS,
         ...rows.map((r) => [
@@ -93,7 +100,7 @@ router.get('/export', async (req, res) => {
 
     XLSX.utils.book_append_sheet(wb, ws, 'Test Tag Items');
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-    const filenameSite = site ? site.replace(/[^a-z0-9]+/gi, '_') : 'all-sites';
+    const filenameSite = scopeTitle ? scopeTitle.replace(/[^a-z0-9]+/gi, '_') : 'all-sites';
     const filenameSuffix = resultFilter === 'fail' ? '-fails-only' : '';
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="test-tag-register-${filenameSite}${filenameSuffix}-${new Date().toISOString().slice(0, 10)}.xlsx"`);
@@ -223,18 +230,21 @@ router.post('/import', upload.single('file'), async (req, res) => {
   }
 });
 
-// GET /api/register/report-dates?site=X - distinct test dates recorded at a site, most recent
-// first. Powers the "which visit are you reporting on" picker before generating a report.
+// GET /api/register/report-dates?site=X  OR  ?job_number=X - distinct test dates recorded
+// for that site (or job), most recent first. Powers the "which visit are you reporting on"
+// picker before generating a report.
 router.get('/report-dates', async (req, res) => {
   try {
     const site = (req.query.site || '').trim();
-    if (!site) return res.status(400).json({ error: 'site is required.' });
+    const jobNumber = (req.query.job_number || '').trim();
+    if (!site && !jobNumber) return res.status(400).json({ error: 'site or job_number is required.' });
+    const clause = jobNumber ? 'LOWER(a.job_number) = LOWER($1)' : 'LOWER(a.site) = LOWER($1)';
     const { rows } = await pool.query(
       `SELECT DISTINCT tr.test_date
        FROM test_records tr JOIN assets a ON a.id = tr.asset_id
-       WHERE LOWER(a.site) = LOWER($1) AND tr.test_date IS NOT NULL
+       WHERE ${clause} AND tr.test_date IS NOT NULL
        ORDER BY tr.test_date DESC`,
-      [site]
+      [jobNumber || site]
     );
     res.json(rows.map((r) => (r.test_date instanceof Date ? r.test_date.toISOString().slice(0, 10) : r.test_date)));
   } catch (err) {
@@ -243,36 +253,40 @@ router.get('/report-dates', async (req, res) => {
   }
 });
 
-// GET /api/register/report?site=X&test_date=YYYY-MM-DD
-// Generates the "Test Register" .docx report for one site's visit on one date, matching Aus
-// Air's existing report template: cover page, inspection details/summary (pass/fail/unfound),
-// then the full register table.
+// GET /api/register/report?site=X&test_date=YYYY-MM-DD  OR  ?job_number=X&test_date=YYYY-MM-DD
+// Generates the "Test Register" .docx report for one site's (or job's) visit on one date,
+// matching Aus Air's existing report template: cover page, inspection details/summary
+// (pass/fail/unfound), then the full register table.
 //
 // "Tested this visit" = the asset has a test_record dated exactly test_date. "Unfound" = the
-// asset is on the register for this site but has no test_record on that date -- i.e. it was
+// asset is on the register for this site/job but has no test_record on that date -- i.e. it was
 // expected (already on the register from a prior cycle) but wasn't located/tested this time.
 // This mirrors the template's own Pass/Fail/Unfound structure without needing any new columns.
 router.get('/report', async (req, res) => {
   try {
     const site = (req.query.site || '').trim();
+    const jobNumber = (req.query.job_number || '').trim();
     const testDate = (req.query.test_date || '').trim();
-    if (!site) return res.status(400).json({ error: 'site is required.' });
+    if (!site && !jobNumber) return res.status(400).json({ error: 'site or job_number is required.' });
     if (!testDate) return res.status(400).json({ error: 'test_date is required.' });
 
+    const scopeClause = jobNumber ? 'LOWER(job_number) = LOWER($1)' : 'LOWER(site) = LOWER($1)';
+    const scopeParam = jobNumber || site;
+
     const { rows: assets } = await pool.query(
-      `SELECT * FROM assets WHERE LOWER(site) = LOWER($1)
+      `SELECT * FROM assets WHERE ${scopeClause}
        ORDER BY
          CASE WHEN plant_no ~ '^[0-9]+$' THEN plant_no::integer END NULLS LAST,
          plant_no ASC NULLS LAST`,
-      [site]
+      [scopeParam]
     );
-    if (assets.length === 0) return res.status(404).json({ error: `No register items found for "${site}".` });
+    if (assets.length === 0) return res.status(404).json({ error: `No register items found for "${scopeParam}".` });
 
     const { rows: testsOnDate } = await pool.query(
       `SELECT tr.* FROM test_records tr JOIN assets a ON a.id = tr.asset_id
-       WHERE LOWER(a.site) = LOWER($1) AND tr.test_date = $2
+       WHERE ${jobNumber ? 'LOWER(a.job_number) = LOWER($1)' : 'LOWER(a.site) = LOWER($1)'} AND tr.test_date = $2
        ORDER BY tr.created_at DESC`,
-      [site, testDate]
+      [scopeParam, testDate]
     );
     // If an asset somehow has more than one test record on the same date, the most recently
     // created one wins -- matches the "latest test" tie-break used elsewhere in this app
@@ -282,10 +296,20 @@ router.get('/report', async (req, res) => {
       if (!(t.asset_id in testByAssetId)) testByAssetId[t.asset_id] = t;
     }
 
-    const buffer = await buildReportDocx({ site, testDate, assets, testByAssetId });
-    const filenameSite = site.replace(/[^a-z0-9]+/gi, '_');
+    // Client Name: surfaced when every matched asset agrees on the same one (common case for a
+    // single site/job visit); left blank rather than guessing if the visit's items disagree.
+    const clientNames = new Set(assets.map((a) => a.client_name).filter(Boolean));
+    const clientName = clientNames.size === 1 ? [...clientNames][0] : null;
+
+    const buffer = await buildReportDocx({
+      site: jobNumber ? (assets[0] && assets[0].site) : site,
+      jobNumber: jobNumber || null,
+      clientName,
+      testDate, assets, testByAssetId,
+    });
+    const filenameScope = scopeParam.replace(/[^a-z0-9]+/gi, '_');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', `attachment; filename="Test_Register_${filenameSite}_${testDate}.docx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="Test_Register_${filenameScope}_${testDate}.docx"`);
     res.send(buffer);
   } catch (err) {
     console.error(err);

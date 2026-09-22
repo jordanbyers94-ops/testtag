@@ -17,6 +17,7 @@
         <div class="brand"><span class="brand-aus">AUS</span><span class="brand-air">AIR</span><span class="brand-elec">ELECTRICAL</span></div>
         <div class="app-title">Test &amp; Tag Register</div>
       </div>
+      <button id="switchUserBtn" class="btn" title="Clear this technician's details on this device">👤 Switch User</button>
       <button id="btnHomeTestTag" class="btn" style="display:none;" title="Back to the Audit Tool home screen">🏠 Home</button>
     </div>
   </header>
@@ -45,11 +46,17 @@
 
       <div class="card">
         <h3>Site</h3>
-        <label>Site / Client *
+        <label>Client Name
+          <input id="clientNameInput" type="text" placeholder="e.g. Holy Spirit Catholic Primary School" />
+        </label>
+        <label>Site Name *
           <input id="siteInput" list="siteOptions" type="text" placeholder="e.g. Holy Spirit Catholic Primary School" />
           <datalist id="siteOptions"></datalist>
         </label>
-        <label>Location <span class="hint">(area within the site, e.g. Tuckshop)</span>
+        <label>Job Number <span class="hint">(optional — covers this whole visit, like Site)</span>
+          <input id="jobNumberInput" type="text" placeholder="e.g. JOB-1042" />
+        </label>
+        <label>Location / Vehicle Rego <span class="hint">(area within the site, e.g. Tuckshop — or a vehicle rego for mobile test &amp; tag)</span>
           <input id="locationInput" type="text" />
         </label>
         <label>Environment category <span class="hint">(sets the default retest interval)</span>
@@ -110,6 +117,7 @@
         <div class="register-toolbar">
           <input id="siteFilter" list="siteOptionsRegister" type="text" placeholder="Filter by site..." />
           <datalist id="siteOptionsRegister"></datalist>
+          <input id="jobNumberFilter" type="text" placeholder="Filter by job number..." />
           <input id="searchInput" type="text" placeholder="Search plant no., appliance, location, serial..." />
         </div>
         <div class="register-toolbar">
@@ -120,6 +128,14 @@
         </div>
         <div class="register-toolbar">
           <button id="renameSiteBtn" class="btn">Rename current site filter</button>
+        </div>
+        <div class="register-toolbar">
+          <label class="hint" style="display:flex;align-items:center;gap:6px;">Export/Report by
+            <select id="exportScopeType">
+              <option value="site">Site</option>
+              <option value="job_number">Job Number</option>
+            </select>
+          </label>
         </div>
         <div class="register-toolbar">
           <button id="refreshBtn" class="btn">Refresh</button>
@@ -161,8 +177,10 @@
         <button id="deleteAssetBtn" class="btn-danger">Delete Item</button>
       </div>
       <div id="editAssetForm" class="card" style="display:none;margin-top:10px;">
-        <label>Site<input id="edit_site" type="text" /></label>
-        <label>Location<input id="edit_location" type="text" /></label>
+        <label>Client Name<input id="edit_client_name" type="text" /></label>
+        <label>Site Name<input id="edit_site" type="text" /></label>
+        <label>Job Number<input id="edit_job_number" type="text" /></label>
+        <label>Location / Vehicle Rego<input id="edit_location" type="text" /></label>
         <label>Appliance<input id="edit_appliance" type="text" /></label>
         <label>Plant No.<input id="edit_plant_no" type="text" /></label>
         <label>Brand<input id="edit_brand" type="text" /></label>
@@ -185,14 +203,13 @@
         <h3>Generate Test Register Report</h3>
         <button id="closeReportModal" class="btn">Close</button>
       </div>
-      <p class="hint">Produces the same "Test Register" report Aus Air sends to clients — cover page, inspection summary, and the full item-by-item register — for one site's visit.</p>
-      <label>Site<input id="reportSiteDisplay" type="text" disabled /></label>
+      <p class="hint">Produces the same "Test Register" report Aus Air sends to clients — cover page, inspection summary, and the full item-by-item register — for one site's (or job's) visit.</p>
+      <label id="reportScopeLabel">Site<input id="reportSiteDisplay" type="text" disabled /></label>
       <label>Visit date <span class="hint">(which test date to report on)</span>
         <select id="reportDateSelect"></select>
       </label>
       <button id="generateReportBtn" class="btn btn-primary">Generate .docx</button>
       <div id="reportModalStatus" class="status"></div>
-      <button id="uploadReportCloudBtn" class="btn" style="display:none;margin-top:6px;" disabled>Upload Report to Cloud</button>
       <div id="uploadReportCloudStatus" class="status"></div>
       <p class="hint" id="cloudReportsLinkWrap" style="display:none;margin-top:10px;">
         <a href="../testtag-reports/" target="_blank" rel="noopener">View all uploaded Test &amp; Tag reports →</a>

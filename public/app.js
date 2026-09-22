@@ -45,6 +45,8 @@ function getCloudToken() {
   if (!IS_PROXIED) return;
   const wrap = document.getElementById('cloudReportsLinkWrap');
   if (wrap) wrap.style.display = 'block';
+  const generateBtn = document.getElementById('generateReportBtn');
+  if (generateBtn) generateBtn.textContent = 'Generate & Upload to Cloud';
 })();
 let currentAssetId = null;
 let currentAssetIsTemp = false; // true while currentAssetId is a client-side tempId (offline, not yet synced)
@@ -114,6 +116,24 @@ function renderSettingsTab() {
     onChange: prefillTester,
   });
 }
+
+// ---------- Switch User ----------
+// Clears this device's technician details entirely -- both the Audit Tool's own Cloud Sync
+// login (if reached that way) and Test & Tag's own local-fallback name/licence/override -- so a
+// shared device (a work tablet, say) can be handed off cleanly to the next technician rather
+// than silently carrying over the previous one's name/licence onto their tests.
+document.getElementById('switchUserBtn').addEventListener('click', () => {
+  if (!confirm('Clear this device\'s saved technician details? The next person to use it will need to log in / enter their own name and licence.')) return;
+  localStorage.removeItem('cloudToken');
+  localStorage.removeItem('cloudTokenExpiresAt');
+  localStorage.removeItem('cloudTechnicianName');
+  localStorage.removeItem('cloudTechnicianLicense');
+  TechnicianProfile.setOverride(TESTER_PROFILE_PREFIX, false);
+  TechnicianProfile.writeLocal(TESTER_PROFILE_PREFIX, '', '');
+  prefillTester();
+  if (document.getElementById('tab-settings').classList.contains('active')) renderSettingsTab();
+  alert('Details cleared. The next technician can enter their own name and licence in Settings (or log into Cloud Sync via the Audit Tool).');
+});
 
 // ---------- Local register cache (IndexedDB) ----------
 // Mirrors the last successful online GET /api/assets response so the Register and Due tabs
@@ -199,12 +219,13 @@ async function mergeOptimisticTest(assetId, payload) {
 // Re-implements the same site/search/result/due filtering the server does in
 // routes/assets.js's GET / handler, so a cached register behaves identically when browsed
 // offline. Keep these two in sync if the server-side filtering logic changes.
-function filterAssetsLocally(rows, { site, search, filter }) {
+function filterAssetsLocally(rows, { site, jobNumber, search, filter }) {
   let out = rows;
   if (site) out = out.filter((r) => (r.site || '').toLowerCase() === site.toLowerCase());
+  if (jobNumber) out = out.filter((r) => (r.job_number || '').toLowerCase() === jobNumber.toLowerCase());
   if (search) {
     const q = search.toLowerCase();
-    out = out.filter((r) => [r.appliance, r.plant_no, r.location, r.serial_no, r.brand, r.last_tag_no]
+    out = out.filter((r) => [r.appliance, r.plant_no, r.location, r.serial_no, r.brand, r.last_tag_no, r.job_number, r.client_name]
       .filter(Boolean).join(' ').toLowerCase().includes(q));
   }
   if (filter === 'fail') out = out.filter((r) => r.last_result === 'fail');
@@ -454,6 +475,8 @@ document.getElementById('saveAssetBtn').addEventListener('click', async () => {
     brand: document.getElementById('f_brand').value.trim() || null,
     model_no: document.getElementById('f_model_no').value.trim() || null,
     serial_no: document.getElementById('f_serial_no').value.trim() || null,
+    client_name: document.getElementById('clientNameInput').value.trim() || null,
+    job_number: document.getElementById('jobNumberInput').value.trim() || null,
   };
 
   try {
@@ -479,7 +502,8 @@ document.getElementById('saveAssetBtn').addEventListener('click', async () => {
         id: tempId, site: payload.site, location: payload.location, appliance: payload.appliance,
         plant_no: payload.plant_no, brand: payload.brand, model_no: payload.model_no,
         serial_no: payload.serial_no, environment_category: payload.environment_category,
-        notes: payload.notes, last_tag_no: null, last_result: null, last_next_due: null,
+        notes: payload.notes, client_name: payload.client_name, job_number: payload.job_number,
+        last_tag_no: null, last_result: null, last_next_due: null,
         last_tester_name: null, _pending: true,
       });
       document.getElementById('testCard').style.display = 'block';
@@ -551,6 +575,7 @@ function resetScanForm() {
 const registerList = document.getElementById('registerList');
 const searchInput = document.getElementById('searchInput');
 const siteFilter = document.getElementById('siteFilter');
+const jobNumberFilter = document.getElementById('jobNumberFilter');
 
 document.getElementById('filterAllBtn').addEventListener('click', () => setActiveFilter(''));
 document.getElementById('filterFailBtn').addEventListener('click', () => setActiveFilter('fail'));
@@ -568,6 +593,7 @@ function setActiveFilter(f) {
 async function loadRegister() {
   registerList.innerHTML = '<p class="status">Loading...</p>';
   const site = siteFilter.value.trim();
+  const jobNumber = jobNumberFilter.value.trim();
   const search = searchInput.value.trim();
   let rows;
   let fromCache = false;
@@ -576,6 +602,7 @@ async function loadRegister() {
     if (!navigator.onLine) throw new Error('offline');
     const params = new URLSearchParams();
     if (site) params.set('site', site);
+    if (jobNumber) params.set('job_number', jobNumber);
     if (search) params.set('search', search);
     if (activeFilter === 'fail') params.set('result', 'fail');
     else if (activeFilter === 'overdue') params.set('due', 'overdue');
@@ -586,11 +613,11 @@ async function loadRegister() {
     // Mirror the full unfiltered register into the local cache (only when this fetch itself
     // wasn't already filtered) so an offline browse later has the complete picture to filter
     // client-side, not just whatever slice happened to be on screen when connection dropped.
-    if (!site && !search && !activeFilter) idbReplaceAllAssets(rows);
+    if (!site && !jobNumber && !search && !activeFilter) idbReplaceAllAssets(rows);
   } catch (err) {
     try {
       const cached = await idbGetAllAssets();
-      rows = filterAssetsLocally(cached, { site, search, filter: activeFilter });
+      rows = filterAssetsLocally(cached, { site, jobNumber, search, filter: activeFilter });
       fromCache = true;
     } catch (idbErr) {
       registerList.innerHTML = `<p class="status">Error: ${err.message}</p>`;
@@ -622,6 +649,7 @@ async function loadRegister() {
       <div class="asset-row ${rowClass}" data-asset-id="${r.id}" data-appliance="${escapeHtml(r.appliance || '')}">
         <div class="plant-no">${escapeHtml(r.appliance || 'Unnamed item')} <span class="badge ${badge}">${badgeText}</span> ${pendingBadge}</div>
         <div class="meta">${escapeHtml(r.site)} · ${escapeHtml(r.location || '—')} ${r.plant_no ? '· Plant No. ' + escapeHtml(r.plant_no) : ''}</div>
+        ${(r.client_name || r.job_number) ? `<div class="meta">${r.client_name ? escapeHtml(r.client_name) : ''}${r.client_name && r.job_number ? ' · ' : ''}${r.job_number ? 'Job ' + escapeHtml(r.job_number) : ''}</div>` : ''}
         <div class="meta">${r.brand ? escapeHtml(r.brand) + ' ' : ''}${r.model_no ? escapeHtml(r.model_no) : ''} ${r.last_tag_no ? '· Tag ' + escapeHtml(r.last_tag_no) : ''}</div>
         <div class="meta">Next due: ${due || '—'}${rowClass === 'overdue' ? ' (OVERDUE)' : rowClass === 'soon' ? ' (due soon)' : ''}</div>
       </div>
@@ -646,6 +674,7 @@ function escapeHtml(str) {
 document.getElementById('refreshBtn').addEventListener('click', loadRegister);
 searchInput.addEventListener('input', debounce(loadRegister, 350));
 siteFilter.addEventListener('input', debounce(loadRegister, 350));
+jobNumberFilter.addEventListener('input', debounce(loadRegister, 350));
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
 // ---------- Site rename ----------
@@ -767,6 +796,8 @@ document.getElementById('quickRetestBtn').addEventListener('click', async () => 
     document.getElementById('siteInput').value = asset.site || '';
     document.getElementById('locationInput').value = asset.location || '';
     document.getElementById('categoryInput').value = asset.environment_category || '';
+    document.getElementById('clientNameInput').value = asset.client_name || '';
+    document.getElementById('jobNumberInput').value = asset.job_number || '';
     document.getElementById('resultCard').style.display = 'none';
     document.getElementById('testCard').style.display = 'block';
     document.getElementById('t_tag_no').value = '';
@@ -798,6 +829,8 @@ document.getElementById('editAssetBtn').addEventListener('click', async () => {
     document.getElementById('edit_brand').value = asset.brand || '';
     document.getElementById('edit_model_no').value = asset.model_no || '';
     document.getElementById('edit_serial_no').value = asset.serial_no || '';
+    document.getElementById('edit_client_name').value = asset.client_name || '';
+    document.getElementById('edit_job_number').value = asset.job_number || '';
     statusEl.textContent = '';
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`; statusEl.className = 'status err';
@@ -821,6 +854,8 @@ document.getElementById('saveAssetEditBtn').addEventListener('click', async () =
     brand: document.getElementById('edit_brand').value.trim() || null,
     model_no: document.getElementById('edit_model_no').value.trim() || null,
     serial_no: document.getElementById('edit_serial_no').value.trim() || null,
+    client_name: document.getElementById('edit_client_name').value.trim() || null,
+    job_number: document.getElementById('edit_job_number').value.trim() || null,
   };
   statusEl.textContent = 'Saving...'; statusEl.className = 'status';
   try {
@@ -891,9 +926,21 @@ async function loadDueSummary() {
 }
 
 // ---------- Export ----------
+// exportScopeType picks whether Export/Generate Report scope by Site (the "Filter by site" box)
+// or by Job Number (the "Filter by job number" box) -- exactly one of the two is sent, mirroring
+// how the register/report backend routes accept either.
+function currentScope() {
+  const byJobNumber = document.getElementById('exportScopeType').value === 'job_number';
+  const value = (byJobNumber ? jobNumberFilter.value : siteFilter.value).trim();
+  return { byJobNumber, value };
+}
+
 document.getElementById('exportBtn').addEventListener('click', () => {
+  // No value in the chosen scope's filter box exports the same consolidated "all sites" view
+  // this always has -- the scope toggle only matters once a value is actually typed in.
+  const { byJobNumber, value } = currentScope();
   const params = new URLSearchParams();
-  if (siteFilter.value.trim()) params.set('site', siteFilter.value.trim());
+  if (value) params.set(byJobNumber ? 'job_number' : 'site', value);
   if (activeFilter === 'fail') params.set('result', 'fail');
   fetch(`${API}/register/export?${params}`, { headers: apiHeaders() })
     .then((res) => res.blob())
@@ -923,28 +970,31 @@ function formatDMY(isoDate) {
 }
 
 document.getElementById('reportBtn').addEventListener('click', async () => {
-  const site = siteFilter.value.trim();
-  if (!site) { alert('Type a site into the "Filter by site" box first -- reports are generated per site.'); return; }
+  const { byJobNumber, value } = currentScope();
+  if (!value) { alert(byJobNumber ? 'Type a job number into the "Filter by job number" box first -- reports are generated per job.' : 'Type a site into the "Filter by site" box first -- reports are generated per site.'); return; }
 
   const statusEl = document.getElementById('reportModalStatus');
   const select = document.getElementById('reportDateSelect');
   const generateBtn = document.getElementById('generateReportBtn');
   statusEl.textContent = '';
-  document.getElementById('reportSiteDisplay').value = site;
+  document.getElementById('reportScopeLabel').firstChild.textContent = byJobNumber ? 'Job Number' : 'Site';
+  document.getElementById('reportSiteDisplay').value = value;
+  document.getElementById('reportSiteDisplay').dataset.scopeType = byJobNumber ? 'job_number' : 'site';
   select.innerHTML = '<option>Loading...</option>';
   generateBtn.disabled = true;
   lastGeneratedReport = null;
-  document.getElementById('uploadReportCloudBtn').style.display = 'none';
   document.getElementById('uploadReportCloudStatus').textContent = '';
   document.getElementById('reportModal').style.display = 'flex';
 
   try {
-    const res = await fetch(`${API}/register/report-dates?site=${encodeURIComponent(site)}`, { headers: apiHeaders() });
+    const params = new URLSearchParams();
+    params.set(byJobNumber ? 'job_number' : 'site', value);
+    const res = await fetch(`${API}/register/report-dates?${params}`, { headers: apiHeaders() });
     const dates = await res.json();
     if (!res.ok) throw new Error(dates.error || 'Failed to load test dates');
     if (!dates.length) {
       select.innerHTML = '';
-      statusEl.textContent = 'No test dates recorded for this site yet -- log at least one test first.';
+      statusEl.textContent = `No test dates recorded for this ${byJobNumber ? 'job number' : 'site'} yet -- log at least one test first.`;
       statusEl.className = 'status err';
       return;
     }
@@ -961,14 +1011,28 @@ document.getElementById('closeReportModal').addEventListener('click', () => {
   document.getElementById('reportModal').style.display = 'none';
 });
 
+// Generates the report, always triggers the local download (kept for the offline/no-signal
+// case -- a technician standing in a plant room with no bars still gets their file), then, when
+// reached via the Audit Tool's proxy with an active Cloud Sync login, immediately uploads the
+// SAME bytes to the cloud too -- one button, one combined status line, per how this was asked
+// for (previously two separate buttons/steps).
 document.getElementById('generateReportBtn').addEventListener('click', async () => {
-  const site = document.getElementById('reportSiteDisplay').value;
+  const scopeDisplay = document.getElementById('reportSiteDisplay');
+  const scopeValue = scopeDisplay.value;
+  const byJobNumber = scopeDisplay.dataset.scopeType === 'job_number';
   const testDate = document.getElementById('reportDateSelect').value;
   if (!testDate) return;
   const statusEl = document.getElementById('reportModalStatus');
+  const uploadStatusEl = document.getElementById('uploadReportCloudStatus');
+  const generateBtn = document.getElementById('generateReportBtn');
   statusEl.textContent = 'Generating…'; statusEl.className = 'status';
+  uploadStatusEl.textContent = '';
+  generateBtn.disabled = true;
   try {
-    const res = await fetch(`${API}/register/report?site=${encodeURIComponent(site)}&test_date=${encodeURIComponent(testDate)}`, { headers: apiHeaders() });
+    const params = new URLSearchParams();
+    params.set(byJobNumber ? 'job_number' : 'site', scopeValue);
+    params.set('test_date', testDate);
+    const res = await fetch(`${API}/register/report?${params}`, { headers: apiHeaders() });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || 'Report generation failed');
@@ -976,58 +1040,53 @@ document.getElementById('generateReportBtn').addEventListener('click', async () 
     const blob = await res.blob();
     const disposition = res.headers.get('Content-Disposition') || '';
     const m = disposition.match(/filename="?([^"]+)"?/);
-    const filename = m ? m[1] : `Test_Register_${site}_${testDate}.docx`;
+    const filename = m ? m[1] : `Test_Register_${scopeValue}_${testDate}.docx`;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-    statusEl.textContent = 'Downloaded.'; statusEl.className = 'status ok';
 
-    lastGeneratedReport = { blob, site, testDate };
-    const uploadBtn = document.getElementById('uploadReportCloudBtn');
-    if (IS_PROXIED) {
-      uploadBtn.style.display = 'inline-block';
-      uploadBtn.disabled = !getCloudToken();
-      uploadBtn.textContent = 'Upload Report to Cloud';
-      document.getElementById('uploadReportCloudStatus').textContent = getCloudToken()
-        ? '' : 'Log into the Audit Tool\'s Cloud Sync first to upload reports.';
+    lastGeneratedReport = { blob, site: byJobNumber ? null : scopeValue, jobNumber: byJobNumber ? scopeValue : null, testDate };
+
+    if (!IS_PROXIED) {
+      statusEl.textContent = 'Downloaded.'; statusEl.className = 'status ok';
+    } else {
+      const token = getCloudToken();
+      if (!token) {
+        statusEl.textContent = 'Downloaded.'; statusEl.className = 'status ok';
+        uploadStatusEl.textContent = 'Not uploaded to the cloud — log into the Audit Tool\'s Cloud Sync first.';
+        uploadStatusEl.className = 'status err';
+      } else {
+        statusEl.textContent = 'Downloaded — uploading to the cloud…'; statusEl.className = 'status';
+        try {
+          const form = new FormData();
+          form.append('docx', lastGeneratedReport.blob, 'report.docx');
+          if (lastGeneratedReport.site) form.append('site', lastGeneratedReport.site);
+          if (lastGeneratedReport.jobNumber) form.append('jobNumber', lastGeneratedReport.jobNumber);
+          form.append('testDate', lastGeneratedReport.testDate);
+          form.append('deviceLabel', navigator.userAgent.slice(0, 120));
+          // Root-relative: this page is reverse-proxied under the Audit Tool's own domain when
+          // IS_PROXIED is true (see APP_BASE above), so this always shares the same origin as
+          // /api/testtag-reports regardless of the proxy path Test & Tag itself is mounted at.
+          const uploadRes = await fetch('/api/testtag-reports', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: form,
+          });
+          const data = await uploadRes.json().catch(() => ({}));
+          if (!uploadRes.ok) throw new Error(data.error || 'Upload failed');
+          statusEl.textContent = 'Downloaded and uploaded to the cloud.'; statusEl.className = 'status ok';
+        } catch (uploadErr) {
+          statusEl.textContent = 'Downloaded.'; statusEl.className = 'status ok';
+          uploadStatusEl.textContent = `Cloud upload failed: ${uploadErr.message}`; uploadStatusEl.className = 'status err';
+        }
+      }
     }
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`; statusEl.className = 'status err';
-  }
-});
-
-document.getElementById('uploadReportCloudBtn').addEventListener('click', async () => {
-  const uploadBtn = document.getElementById('uploadReportCloudBtn');
-  const uploadStatusEl = document.getElementById('uploadReportCloudStatus');
-  if (!lastGeneratedReport) { uploadStatusEl.textContent = 'Generate the report first.'; uploadStatusEl.className = 'status err'; return; }
-  const token = getCloudToken();
-  if (!token) { uploadStatusEl.textContent = 'Log into the Audit Tool\'s Cloud Sync first to upload reports.'; uploadStatusEl.className = 'status err'; return; }
-
-  uploadBtn.disabled = true;
-  uploadStatusEl.textContent = 'Uploading…'; uploadStatusEl.className = 'status';
-  try {
-    const form = new FormData();
-    form.append('docx', lastGeneratedReport.blob, 'report.docx');
-    form.append('site', lastGeneratedReport.site);
-    form.append('testDate', lastGeneratedReport.testDate);
-    form.append('deviceLabel', navigator.userAgent.slice(0, 120));
-    // Root-relative: this page is reverse-proxied under the Audit Tool's own domain when
-    // IS_PROXIED is true (see APP_BASE above), so this always shares the same origin as
-    // /api/testtag-reports regardless of the proxy path Test & Tag itself is mounted at.
-    const res = await fetch('/api/testtag-reports', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: form,
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Upload failed');
-    uploadStatusEl.textContent = 'Uploaded to the cloud.'; uploadStatusEl.className = 'status ok';
-    uploadBtn.textContent = 'Uploaded ✓';
-  } catch (err) {
-    uploadStatusEl.textContent = `Error: ${err.message}`; uploadStatusEl.className = 'status err';
-    uploadBtn.disabled = false;
+  } finally {
+    generateBtn.disabled = false;
   }
 });
 
