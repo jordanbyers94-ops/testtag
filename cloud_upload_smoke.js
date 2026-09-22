@@ -41,7 +41,8 @@ async function run() {
   // jsdom doesn't implement createObjectURL/revokeObjectURL -- app.js uses these purely to
   // trigger the browser's own download of the generated report, unrelated to what this test
   // is checking (the cloud upload call), so stub them out.
-  window.URL.createObjectURL = () => 'blob:mock-url';
+  let createObjectUrlCalls = 0;
+  window.URL.createObjectURL = () => { createObjectUrlCalls++; return 'blob:mock-url'; };
   window.URL.revokeObjectURL = () => {};
 
   window.localStorage.setItem('cloudTechnicianName', 'Jordan Byers');
@@ -93,10 +94,12 @@ async function run() {
   check('No upload attempted without a valid cloud token', uploadCalls.length === 0);
   check('Download still reported as successful', doc.getElementById('reportModalStatus').textContent === 'Downloaded.');
   check('Upload status explains why nothing was uploaded', doc.getElementById('uploadReportCloudStatus').textContent.toLowerCase().includes('log into'));
+  check('Local download WAS triggered when nothing could be uploaded', createObjectUrlCalls === 1);
 
-  // ---------- Scenario B: Site scope, valid cloud token -- combined download + upload ----------
+  // ---------- Scenario B: Site scope, valid cloud token -- upload only, no local download ----------
   window.localStorage.setItem('cloudToken', 'test-token-abc');
   window.localStorage.setItem('cloudTokenExpiresAt', String(Date.now() + 3600000));
+  createObjectUrlCalls = 0;
   doc.getElementById('generateReportBtn').click();
   await new Promise((r) => setTimeout(r, 150));
 
@@ -108,7 +111,8 @@ async function run() {
     check('Upload body is FormData with docx/site/testDate', typeof call.body.get === 'function' && call.body.get('site') === 'William Jolly Bridge' && call.body.get('testDate') === '2026-03-06' && !!call.body.get('docx'));
     check('Upload body has no jobNumber for a site-scoped report', !call.body.get('jobNumber'));
   }
-  check('Combined success status shown after upload', doc.getElementById('reportModalStatus').textContent.toLowerCase().includes('uploaded to the cloud'));
+  check('Success status shown after upload', doc.getElementById('reportModalStatus').textContent.toLowerCase().includes('uploaded to the cloud'));
+  check('No local download/open triggered when the upload succeeded', createObjectUrlCalls === 0);
 
   // ---------- Scenario C: Job Number scope -- report-dates/report/upload all switch params ----------
   doc.getElementById('exportScopeType').value = 'job_number';
@@ -119,6 +123,7 @@ async function run() {
   check('report-dates requested with job_number param when scoped by job', reportDatesCalls.some((u) => u.includes('job_number=JOB-1042')));
   check('Scope label switches to Job Number', doc.getElementById('reportScopeLabel').firstChild.textContent === 'Job Number');
 
+  createObjectUrlCalls = 0;
   doc.getElementById('generateReportBtn').click();
   await new Promise((r) => setTimeout(r, 150));
 
@@ -128,6 +133,7 @@ async function run() {
     check('Job-scoped upload body has jobNumber set', call.body.get('jobNumber') === 'JOB-1042');
     check('Job-scoped upload body has no site', !call.body.get('site'));
   }
+  check('No local download/open triggered for the job-number-scoped upload either', createObjectUrlCalls === 0);
 
   // ---------- Scenario D: Switch User clears the cloud login ----------
   window.confirm = () => true;

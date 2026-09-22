@@ -1011,11 +1011,12 @@ document.getElementById('closeReportModal').addEventListener('click', () => {
   document.getElementById('reportModal').style.display = 'none';
 });
 
-// Generates the report, always triggers the local download (kept for the offline/no-signal
-// case -- a technician standing in a plant room with no bars still gets their file), then, when
-// reached via the Audit Tool's proxy with an active Cloud Sync login, immediately uploads the
-// SAME bytes to the cloud too -- one button, one combined status line, per how this was asked
-// for (previously two separate buttons/steps).
+// Generates the report, then either uploads it straight to the cloud (when reached via the
+// Audit Tool's proxy with an active Cloud Sync login -- no local download/open on the device at
+// all, just the upload) or, when that's not possible (standalone hosting, or no valid cloud
+// login yet), falls back to triggering the local browser download so the technician still gets
+// the file -- one button, one combined status line, per how this was asked for (previously two
+// separate buttons/steps).
 document.getElementById('generateReportBtn').addEventListener('click', async () => {
   const scopeDisplay = document.getElementById('reportSiteDisplay');
   const scopeValue = scopeDisplay.value;
@@ -1041,46 +1042,57 @@ document.getElementById('generateReportBtn').addEventListener('click', async () 
     const disposition = res.headers.get('Content-Disposition') || '';
     const m = disposition.match(/filename="?([^"]+)"?/);
     const filename = m ? m[1] : `Test_Register_${scopeValue}_${testDate}.docx`;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
 
     lastGeneratedReport = { blob, site: byJobNumber ? null : scopeValue, jobNumber: byJobNumber ? scopeValue : null, testDate };
 
-    if (!IS_PROXIED) {
-      statusEl.textContent = 'Downloaded.'; statusEl.className = 'status ok';
-    } else {
-      const token = getCloudToken();
-      if (!token) {
+    // Only fall back to a local browser download when we can't upload straight to the cloud --
+    // when we CAN upload, do that and nothing else: no local download/open-on-device at all.
+    const token = IS_PROXIED ? getCloudToken() : null;
+
+    if (!token) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+
+      if (!IS_PROXIED) {
+        statusEl.textContent = 'Downloaded.'; statusEl.className = 'status ok';
+      } else {
         statusEl.textContent = 'Downloaded.'; statusEl.className = 'status ok';
         uploadStatusEl.textContent = 'Not uploaded to the cloud — log into the Audit Tool\'s Cloud Sync first.';
         uploadStatusEl.className = 'status err';
-      } else {
-        statusEl.textContent = 'Downloaded — uploading to the cloud…'; statusEl.className = 'status';
-        try {
-          const form = new FormData();
-          form.append('docx', lastGeneratedReport.blob, 'report.docx');
-          if (lastGeneratedReport.site) form.append('site', lastGeneratedReport.site);
-          if (lastGeneratedReport.jobNumber) form.append('jobNumber', lastGeneratedReport.jobNumber);
-          form.append('testDate', lastGeneratedReport.testDate);
-          form.append('deviceLabel', navigator.userAgent.slice(0, 120));
-          // Root-relative: this page is reverse-proxied under the Audit Tool's own domain when
-          // IS_PROXIED is true (see APP_BASE above), so this always shares the same origin as
-          // /api/testtag-reports regardless of the proxy path Test & Tag itself is mounted at.
-          const uploadRes = await fetch('/api/testtag-reports', {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-            body: form,
-          });
-          const data = await uploadRes.json().catch(() => ({}));
-          if (!uploadRes.ok) throw new Error(data.error || 'Upload failed');
-          statusEl.textContent = 'Downloaded and uploaded to the cloud.'; statusEl.className = 'status ok';
-        } catch (uploadErr) {
-          statusEl.textContent = 'Downloaded.'; statusEl.className = 'status ok';
-          uploadStatusEl.textContent = `Cloud upload failed: ${uploadErr.message}`; uploadStatusEl.className = 'status err';
-        }
+      }
+    } else {
+      statusEl.textContent = 'Uploading to the cloud…'; statusEl.className = 'status';
+      try {
+        const form = new FormData();
+        form.append('docx', lastGeneratedReport.blob, 'report.docx');
+        if (lastGeneratedReport.site) form.append('site', lastGeneratedReport.site);
+        if (lastGeneratedReport.jobNumber) form.append('jobNumber', lastGeneratedReport.jobNumber);
+        form.append('testDate', lastGeneratedReport.testDate);
+        form.append('deviceLabel', navigator.userAgent.slice(0, 120));
+        // Root-relative: this page is reverse-proxied under the Audit Tool's own domain when
+        // IS_PROXIED is true (see APP_BASE above), so this always shares the same origin as
+        // /api/testtag-reports regardless of the proxy path Test & Tag itself is mounted at.
+        const uploadRes = await fetch('/api/testtag-reports', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: form,
+        });
+        const data = await uploadRes.json().catch(() => ({}));
+        if (!uploadRes.ok) throw new Error(data.error || 'Upload failed');
+        statusEl.textContent = 'Uploaded to the cloud.'; statusEl.className = 'status ok';
+      } catch (uploadErr) {
+        // The upload failed, so give the technician the file the only other way they can get
+        // it: the local download, same as the no-token path above.
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        statusEl.textContent = 'Downloaded (cloud upload failed).'; statusEl.className = 'status err';
+        uploadStatusEl.textContent = `Cloud upload failed: ${uploadErr.message}`; uploadStatusEl.className = 'status err';
       }
     }
   } catch (err) {
