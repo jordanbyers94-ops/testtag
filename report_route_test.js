@@ -19,10 +19,12 @@ const assets = [
   { id: 2, site: 'William Jolly Bridge', location: 'North end', appliance: 'Drop Saw', plant_no: '2', brand: 'Makita', model_no: 'LS1018', serial_no: 'SN2', environment_category: 'construction', notes: null },
   { id: 3, site: 'William Jolly Bridge', location: 'South end', appliance: 'Grinder', plant_no: '3', brand: 'Bosch', model_no: null, serial_no: null, environment_category: 'construction', notes: null },
   { id: 4, site: 'Other Site', location: 'Shed', appliance: 'Kettle', plant_no: '9', brand: 'Sunbeam', model_no: null, serial_no: null, environment_category: 'office_low_risk', notes: null },
+  { id: 5, site: 'William Jolly Bridge', location: 'South end', appliance: 'Cable Reel', plant_no: '5', brand: 'HPM', model_no: null, serial_no: null, environment_category: 'construction', notes: null },
 ];
 const testRecords = [
   { id: 1, asset_id: 1, test_date: '2026-03-06', tag_no: 'TAG-101', result: 'pass', next_due: '2026-06-06', created_at: new Date('2026-03-06T09:00:00Z') },
   { id: 2, asset_id: 2, test_date: '2026-03-06', tag_no: 'TAG-102', result: 'fail', next_due: null, created_at: new Date('2026-03-06T09:05:00Z') },
+  { id: 3, asset_id: 5, test_date: '2026-03-06', tag_no: 'TAG-105', result: 'repairable', next_due: null, notes: 'damaged sheath', created_at: new Date('2026-03-06T09:10:00Z') },
   // asset_id 3 has no test on 2026-03-06 -> should be reported "unfound"
 ];
 
@@ -97,6 +99,9 @@ const server = app.listen(0, async () => {
     check('Report document counts reflect 1 pass, 1 fail, 1 unfound (of 3 site items)', /\b1\b[\s\S]{0,40}pass/i.test(xml) || xml.toLowerCase().includes('unfound'));
     check('Report no longer mentions RCD (Test & Tag covers portable equipment only)', !xml.toLowerCase().includes('rcd'));
     check('Register table has a Location column with the asset locations', xml.includes('North end') && xml.includes('South end'));
+    check('Register table lists the repairable item as Repairable', xml.includes('Repairable') && xml.includes('TAG-105'));
+    check('Details page has an Items Repairable section', xml.includes('Items Repairable'));
+    check('Details page mentions the repairable item\'s reason', xml.includes('damaged sheath'));
 
     const mediaList = execSync(`unzip -l "${tmpFile}"`).toString('utf8');
     const mediaImages = (mediaList.match(/word\/media\/[^\s/]+\.\w+/g) || []).length;

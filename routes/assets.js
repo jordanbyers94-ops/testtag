@@ -127,7 +127,7 @@ router.get('/', async (req, res) => {
         return haystack.includes(search);
       });
     }
-    if (result === 'pass' || result === 'fail') filtered = filtered.filter((r) => r.last_result === result);
+    if (['pass', 'fail', 'repairable'].includes(result)) filtered = filtered.filter((r) => r.last_result === result);
     if (due === 'overdue') {
       const today = new Date().toISOString().slice(0, 10);
       filtered = filtered.filter((r) => r.last_next_due && r.last_next_due.toISOString().slice(0, 10) < today);
@@ -153,6 +153,7 @@ router.get('/due-summary', async (req, res) => {
         COUNT(*) FILTER (WHERE t.next_due IS NOT NULL AND t.next_due < CURRENT_DATE) AS overdue,
         COUNT(*) FILTER (WHERE t.next_due IS NOT NULL AND t.next_due >= CURRENT_DATE AND t.next_due <= CURRENT_DATE + INTERVAL '30 days') AS due_soon,
         COUNT(*) FILTER (WHERE t.result = 'fail') AS fails,
+        COUNT(*) FILTER (WHERE t.result = 'repairable') AS repairable,
         COUNT(*) AS total_assets
       FROM assets a
       LEFT JOIN LATERAL (
@@ -354,8 +355,8 @@ router.post('/', async (req, res) => {
 router.post('/:id/tests', async (req, res) => {
   try {
     const { tag_no, test_date, next_due, tester_name, tester_licence, result, notes, photo_base64, photo_media_type } = req.body;
-    if (!result || !['pass', 'fail'].includes(result)) {
-      return res.status(400).json({ error: 'result must be "pass" or "fail".' });
+    if (!result || !['pass', 'fail', 'repairable'].includes(result)) {
+      return res.status(400).json({ error: 'result must be "pass", "fail", or "repairable".' });
     }
 
     let finalNextDue = next_due || null;
@@ -387,8 +388,8 @@ router.post('/:id/tests', async (req, res) => {
 router.patch('/:id/tests/:testId', async (req, res) => {
   try {
     const { tag_no, test_date, next_due, tester_name, tester_licence, result, notes } = req.body;
-    if (result && !['pass', 'fail'].includes(result)) {
-      return res.status(400).json({ error: 'result must be "pass" or "fail".' });
+    if (result && !['pass', 'fail', 'repairable'].includes(result)) {
+      return res.status(400).json({ error: 'result must be "pass", "fail", or "repairable".' });
     }
     const { rows } = await pool.query(
       `

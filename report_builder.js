@@ -15,6 +15,7 @@ const BRAND_ORANGE = 'F5A623';
 const BRAND_BLACK = '1A1A1A';
 const BRAND_GRAY = '666666';
 const FAIL_RED = 'C0392B';
+const REPAIR_AMBER = 'B26A00';
 const UNFOUND_GRAY = '999999';
 
 const CONTACT = {
@@ -185,7 +186,7 @@ function buildCoverPage({ testDate, scopeType, scopeValue, clientName }) {
   ];
 }
 
-function complianceStatement({ total, passedAssets, failedAssets, unfoundAssets, passedDueDates }) {
+function complianceStatement({ total, passedAssets, failedAssets, repairableAssets, unfoundAssets, passedDueDates }) {
   let s = `Of ${total} item${total === 1 ? '' : 's'} inspected, ${passedAssets.length} passed`;
   if (passedDueDates.size === 1) s += ` and were tagged with the next scheduled test date of ${[...passedDueDates][0]}`;
   s += '.';
@@ -197,10 +198,13 @@ function complianceStatement({ total, passedAssets, failedAssets, unfoundAssets,
     }
     s += '.';
   }
+  if (repairableAssets && repairableAssets.length) {
+    s += ` ${repairableAssets.length === 1 ? 'One item requires repair' : repairableAssets.length + ' items require repair'} before being returned to service.`;
+  }
   if (unfoundAssets.length) {
     s += ` ${unfoundAssets.length} item${unfoundAssets.length === 1 ? ' was' : 's were'} unfound.`;
   }
-  s += ' Compliant items were tagged, failed items scheduled for corrective action, and unserviceable equipment removed from service.';
+  s += ' Compliant items were tagged, failed items scheduled for corrective action, repairable items flagged for repair, and unserviceable equipment removed from service.';
   return s;
 }
 
@@ -208,6 +212,7 @@ function buildDetailsPage({ testDate, assets, testByAssetId, scopeType, scopeVal
   const total = assets.length;
   const passedAssets = [];
   const failedAssets = [];
+  const repairableAssets = [];
   const unfoundAssets = [];
   const testerCounts = {};
   const passedDueDates = new Set();
@@ -218,6 +223,7 @@ function buildDetailsPage({ testDate, assets, testByAssetId, scopeType, scopeVal
     if (!t) { unfoundAssets.push(a); continue; }
     if (t.tester_name) testerCounts[t.tester_name] = (testerCounts[t.tester_name] || 0) + 1;
     if (t.result === 'fail') { failedAssets.push({ asset: a, test: t }); continue; }
+    if (t.result === 'repairable') { repairableAssets.push({ asset: a, test: t }); continue; }
     passedAssets.push({ asset: a, test: t });
     if (t.next_due) passedDueDates.add(formatDMY(t.next_due));
     const appliance = (a.appliance || '').trim();
@@ -239,6 +245,7 @@ function buildDetailsPage({ testDate, assets, testByAssetId, scopeType, scopeVal
   children.push(bullet(`Total items inspected: ${total}`));
   children.push(bullet(`Pass: ${passedAssets.length}`));
   children.push(bullet(`Fail: ${failedAssets.length}`));
+  children.push(bullet(`Repairable: ${repairableAssets.length}`));
   children.push(bullet(`Unfound: ${unfoundAssets.length}`));
 
   if (passedAssets.length) {
@@ -265,6 +272,15 @@ function buildDetailsPage({ testDate, assets, testByAssetId, scopeType, scopeVal
     }
   }
 
+  if (repairableAssets.length) {
+    children.push(heading('Items Repairable'));
+    for (const { asset, test } of repairableAssets) {
+      const desc = asset.appliance || 'Item';
+      const reason = test.notes ? test.notes : 'repair required';
+      children.push(bullet(`Plant No. ${asset.plant_no || '—'} – ${desc} (Repairable – ${reason})`));
+    }
+  }
+
   if (unfoundAssets.length) {
     children.push(heading('Items Unfound'));
     for (const a of unfoundAssets) {
@@ -277,7 +293,7 @@ function buildDetailsPage({ testDate, assets, testByAssetId, scopeType, scopeVal
 
   children.push(heading('Compliance Statement'));
   children.push(new Paragraph({ children: [
-    new TextRun({ text: complianceStatement({ total, passedAssets, failedAssets, unfoundAssets, passedDueDates }), size: 22 }),
+    new TextRun({ text: complianceStatement({ total, passedAssets, failedAssets, repairableAssets, unfoundAssets, passedDueDates }), size: 22 }),
   ] }));
 
   children.push(new Paragraph({ children: [new PageBreak()] }));
@@ -301,7 +317,7 @@ function buildRegisterTable({ assets, testByAssetId }) {
   // a within-site reader can still see at a glance where at the site each item lives.
   const headerRow = new TableRow({
     tableHeader: true,
-    children: ['Site', 'Location', 'Plant No.', 'Plant Description', 'Tag No.', 'Pass/Fail', 'Test Date', 'Next Due'].map((h) => new TableCell({
+    children: ['Site', 'Location', 'Plant No.', 'Plant Description', 'Tag No.', 'Result', 'Test Date', 'Next Due'].map((h) => new TableCell({
       shading: { fill: BRAND_ORANGE, type: ShadingType.CLEAR, color: 'auto' },
       verticalAlign: VerticalAlign.CENTER,
       margins: { top: 60, bottom: 60, left: 80, right: 80 },
@@ -315,10 +331,10 @@ function buildRegisterTable({ assets, testByAssetId }) {
   const rows = [headerRow];
   for (const a of assets) {
     const t = testByAssetId[a.id];
-    const resultText = t ? (t.result === 'fail' ? 'Fail' : 'Pass') : 'Unfound';
+    const resultText = t ? (t.result === 'fail' ? 'Fail' : t.result === 'repairable' ? 'Repairable' : 'Pass') : 'Unfound';
     const testDateText = t ? formatDMY(t.test_date) : 'N/A';
     const nextDueText = t && t.result === 'pass' ? formatDMY(t.next_due) : 'N/A';
-    const resultColor = t ? (t.result === 'fail' ? FAIL_RED : undefined) : UNFOUND_GRAY;
+    const resultColor = t ? (t.result === 'fail' ? FAIL_RED : t.result === 'repairable' ? REPAIR_AMBER : undefined) : UNFOUND_GRAY;
     const tagText = t && t.tag_no ? t.tag_no : '—';
     rows.push(new TableRow({ children: [
       cell(a.site || '—'),

@@ -18,7 +18,7 @@ Return ONLY a JSON object, no markdown fences, no preamble, with this exact shap
   "model_no": string or null,
   "serial_no": string or null,
   "test_date_on_tag": string or null,   // ISO YYYY-MM-DD if the tag shows a printed test date, else raw text
-  "pass_fail_on_tag": string or null,   // "pass" or "fail" only if explicitly marked on the tag, else null
+  "pass_fail_on_tag": string or null,   // "pass", "fail", or "repairable" only if explicitly marked on the tag, else null
   "confidence_notes": string or null    // brief note on anything illegible, ambiguous, or missing
 }
 

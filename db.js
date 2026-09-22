@@ -78,7 +78,7 @@ async function initDb() {
       id SERIAL PRIMARY KEY,
       asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
       tag_no TEXT,
-      result TEXT NOT NULL CHECK (result IN ('pass', 'fail')),
+      result TEXT NOT NULL CHECK (result IN ('pass', 'fail', 'repairable')),
       test_date DATE,
       next_due DATE,
       tester_name TEXT,
@@ -93,6 +93,13 @@ async function initDb() {
   await pool.query(`ALTER TABLE test_records ADD COLUMN IF NOT EXISTS photo BYTEA;`);
   await pool.query(`ALTER TABLE test_records ADD COLUMN IF NOT EXISTS photo_media_type TEXT;`);
   await pool.query(`ALTER TABLE test_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();`);
+  // Widens the result CHECK constraint to also allow 'repairable' (an item that failed but can
+  // be fixed rather than scrapped, distinct from a straight fail/write-off) -- a deployment
+  // that already has the old pass/fail-only constraint needs this dropped and re-added; a fresh
+  // database already gets the widened constraint from the CREATE TABLE above, so this is a
+  // no-op there (DROP...IF EXISTS + re-ADD is safe to run on every boot either way).
+  await pool.query(`ALTER TABLE test_records DROP CONSTRAINT IF EXISTS test_records_result_check;`);
+  await pool.query(`ALTER TABLE test_records ADD CONSTRAINT test_records_result_check CHECK (result IN ('pass', 'fail', 'repairable'));`);
 
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_test_records_asset_id ON test_records(asset_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_test_records_tag_no ON test_records(tag_no);`);

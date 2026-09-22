@@ -7,7 +7,7 @@ const { buildReportDocx } = require('../report_builder');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
-const TEMPLATE_HEADERS = ['Asset ID', 'Location', 'Appliance', 'Plant No.', 'Brand ', 'Model No.', 'Serial No.', 'Pass/Fail', 'Tag No.', 'Test Date', 'Next Due', 'Notes'];
+const TEMPLATE_HEADERS = ['Asset ID', 'Location', 'Appliance', 'Plant No.', 'Brand ', 'Model No.', 'Serial No.', 'Result', 'Tag No.', 'Test Date', 'Next Due', 'Notes'];
 
 // scope: { site } or { jobNumber } -- exactly one of the two, mirroring how Site has always
 // worked (used as-is when neither is given, for backward compatibility / "all sites" export).
@@ -46,7 +46,7 @@ router.get('/export', async (req, res) => {
     const site = (req.query.site || '').trim();
     const jobNumber = (req.query.job_number || '').trim();
     const resultFilter = (req.query.result || '').trim();
-    const rows = await fetchRegisterRows({ site: site || null, jobNumber: jobNumber || null }, resultFilter === 'fail' || resultFilter === 'pass' ? resultFilter : null);
+    const rows = await fetchRegisterRows({ site: site || null, jobNumber: jobNumber || null }, ['fail', 'pass', 'repairable'].includes(resultFilter) ? resultFilter : null);
     const scopeTitle = jobNumber ? `Job Number: ${jobNumber}` : site;
 
     const wb = XLSX.utils.book_new();
@@ -101,7 +101,7 @@ router.get('/export', async (req, res) => {
     XLSX.utils.book_append_sheet(wb, ws, 'Test Tag Items');
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     const filenameSite = scopeTitle ? scopeTitle.replace(/[^a-z0-9]+/gi, '_') : 'all-sites';
-    const filenameSuffix = resultFilter === 'fail' ? '-fails-only' : '';
+    const filenameSuffix = resultFilter === 'fail' ? '-fails-only' : resultFilter === 'repairable' ? '-repairable-only' : '';
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="test-tag-register-${filenameSite}${filenameSuffix}-${new Date().toISOString().slice(0, 10)}.xlsx"`);
     res.send(buffer);
@@ -146,7 +146,7 @@ router.post('/import', upload.single('file'), async (req, res) => {
       brand: colIdx('brand', 'brand '.trim()),
       model_no: colIdx('model no.', 'model no'),
       serial_no: colIdx('serial no.', 'serial no'),
-      result: colIdx('pass/fail'),
+      result: colIdx('result', 'pass/fail'),
       tag_no: colIdx('tag no.', 'tag no'),
       test_date: colIdx('test date'),
       next_due: colIdx('next due'),
@@ -200,7 +200,7 @@ router.post('/import', upload.single('file'), async (req, res) => {
         const assetId = upsert.rows[0].id;
 
         const result = idx.result !== -1 ? String(row[idx.result] || '').trim().toLowerCase() : null;
-        if (result === 'pass' || result === 'fail') {
+        if (['pass', 'fail', 'repairable'].includes(result)) {
           const toDate = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : v || null);
           await pool.query(
             `

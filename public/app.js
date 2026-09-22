@@ -52,7 +52,7 @@ let currentAssetId = null;
 let currentAssetIsTemp = false; // true while currentAssetId is a client-side tempId (offline, not yet synced)
 let currentPhotoBase64 = null;
 let currentPhotoMediaType = null;
-let activeFilter = ''; // '' | 'fail' | 'overdue' | 'soon'
+let activeFilter = ''; // '' | 'fail' | 'repairable' | 'overdue' | 'soon'
 
 // ---------- Tabs ----------
 document.querySelectorAll('.tab-btn').forEach((btn) => {
@@ -228,7 +228,7 @@ function filterAssetsLocally(rows, { site, jobNumber, search, filter }) {
     out = out.filter((r) => [r.appliance, r.plant_no, r.location, r.serial_no, r.brand, r.last_tag_no, r.job_number, r.client_name]
       .filter(Boolean).join(' ').toLowerCase().includes(q));
   }
-  if (filter === 'fail') out = out.filter((r) => r.last_result === 'fail');
+  if (filter === 'fail' || filter === 'repairable') out = out.filter((r) => r.last_result === filter);
   else if (filter === 'overdue' || filter === 'soon') {
     const today = new Date().toISOString().slice(0, 10);
     const in30 = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
@@ -425,7 +425,7 @@ extractBtn.addEventListener('click', async () => {
     document.getElementById('f_model_no').value = ex.model_no || '';
     document.getElementById('f_serial_no').value = ex.serial_no || '';
     document.getElementById('t_tag_no').value = ex.tag_no || '';
-    document.getElementById('t_result').value = ex.pass_fail_on_tag === 'fail' ? 'fail' : 'pass';
+    document.getElementById('t_result').value = ['fail', 'repairable'].includes(ex.pass_fail_on_tag) ? ex.pass_fail_on_tag : 'pass';
     document.getElementById('t_test_date').value = normalizeDate(ex.test_date_on_tag);
 
     document.getElementById('resultCard').style.display = 'block';
@@ -601,12 +601,14 @@ const jobNumberFilter = document.getElementById('jobNumberFilter');
 
 document.getElementById('filterAllBtn').addEventListener('click', () => setActiveFilter(''));
 document.getElementById('filterFailBtn').addEventListener('click', () => setActiveFilter('fail'));
+document.getElementById('filterRepairableBtn').addEventListener('click', () => setActiveFilter('repairable'));
 document.getElementById('filterOverdueBtn').addEventListener('click', () => setActiveFilter('overdue'));
 document.getElementById('filterSoonBtn').addEventListener('click', () => setActiveFilter('soon'));
 function setActiveFilter(f) {
   activeFilter = f;
   document.getElementById('filterAllBtn').classList.toggle('active', f === '');
   document.getElementById('filterFailBtn').classList.toggle('active', f === 'fail');
+  document.getElementById('filterRepairableBtn').classList.toggle('active', f === 'repairable');
   document.getElementById('filterOverdueBtn').classList.toggle('active', f === 'overdue');
   document.getElementById('filterSoonBtn').classList.toggle('active', f === 'soon');
   loadRegister();
@@ -626,7 +628,7 @@ async function loadRegister() {
     if (site) params.set('site', site);
     if (jobNumber) params.set('job_number', jobNumber);
     if (search) params.set('search', search);
-    if (activeFilter === 'fail') params.set('result', 'fail');
+    if (activeFilter === 'fail' || activeFilter === 'repairable') params.set('result', activeFilter);
     else if (activeFilter === 'overdue') params.set('due', 'overdue');
     else if (activeFilter === 'soon') params.set('due', 'soon');
     const res = await fetch(`${API}/assets?${params}`, { headers: apiHeaders() });
@@ -660,7 +662,7 @@ async function loadRegister() {
     : '';
 
   registerList.innerHTML = cacheNotice + rows.map((r) => {
-    const badge = r.last_result === 'pass' ? 'badge-pass' : r.last_result === 'fail' ? 'badge-fail' : 'badge-none';
+    const badge = r.last_result === 'pass' ? 'badge-pass' : r.last_result === 'fail' ? 'badge-fail' : r.last_result === 'repairable' ? 'badge-repairable' : 'badge-none';
     const badgeText = r.last_result ? r.last_result.toUpperCase() : 'NOT TESTED';
     const due = r.last_next_due ? String(r.last_next_due).slice(0, 10) : null;
     let rowClass = '';
@@ -774,8 +776,8 @@ async function openHistoryModal(assetId, appliance) {
       btn.addEventListener('click', (e) => {
         const entry = e.target.closest('.history-entry');
         const testId = entry.dataset.testId;
-        const newResult = prompt('Result (pass/fail):');
-        if (!newResult || !['pass', 'fail'].includes(newResult.trim().toLowerCase())) { if (newResult !== null) alert('Must be "pass" or "fail" - no changes made.'); return; }
+        const newResult = prompt('Result (pass/fail/repairable):');
+        if (!newResult || !['pass', 'fail', 'repairable'].includes(newResult.trim().toLowerCase())) { if (newResult !== null) alert('Must be "pass", "fail", or "repairable" - no changes made.'); return; }
         const newDate = prompt('Test date (YYYY-MM-DD), leave blank to keep as-is:');
         const newDue = prompt('Next due (YYYY-MM-DD), leave blank to keep as-is:');
         const body = { result: newResult.trim().toLowerCase() };
@@ -927,7 +929,8 @@ async function loadDueSummary() {
           ${Number(r.overdue) > 0 ? `<span class="due-count overdue">${r.overdue} overdue</span>` : ''}
           ${Number(r.due_soon) > 0 ? `<span class="due-count soon">${r.due_soon} due soon</span>` : ''}
           ${Number(r.fails) > 0 ? `<span class="due-count fails">${r.fails} failed</span>` : ''}
-          ${Number(r.overdue) === 0 && Number(r.due_soon) === 0 && Number(r.fails) === 0 ? 'All clear' : ''}
+          ${Number(r.repairable) > 0 ? `<span class="due-count repairable">${r.repairable} repairable</span>` : ''}
+          ${Number(r.overdue) === 0 && Number(r.due_soon) === 0 && Number(r.fails) === 0 && Number(r.repairable) === 0 ? 'All clear' : ''}
         </div>
         <div class="meta">${r.total_assets} items on register</div>
       </div>
@@ -963,7 +966,7 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   const { byJobNumber, value } = currentScope();
   const params = new URLSearchParams();
   if (value) params.set(byJobNumber ? 'job_number' : 'site', value);
-  if (activeFilter === 'fail') params.set('result', 'fail');
+  if (activeFilter === 'fail' || activeFilter === 'repairable') params.set('result', activeFilter);
   fetch(`${API}/register/export?${params}`, { headers: apiHeaders() })
     .then((res) => res.blob())
     .then((blob) => {

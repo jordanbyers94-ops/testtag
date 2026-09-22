@@ -115,6 +115,7 @@ input[type="file"] { margin-top: 8px; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
 .badge-pass { background: #e8f5e9; color: var(--success); }
 .badge-fail { background: #ffebee; color: var(--danger); }
+.badge-repairable { background: #fff8e1; color: #b26a00; }
 .badge-none { background: #eee; color: #888; }
 
 datalist { display: none; }
@@ -132,6 +133,7 @@ datalist { display: none; }
 .due-count.overdue { background: #ffebee; color: var(--danger); }
 .due-count.soon { background: #fff3e0; color: #e65100; }
 .due-count.fails { background: #fce4ec; color: #ad1457; }
+.due-count.repairable { background: #fff8e1; color: #b26a00; }
 
 .asset-row { border-bottom: 1px solid var(--border); padding: 10px 0; cursor: pointer; }
 .asset-row.overdue { background: #fff5f5; }
